@@ -3,15 +3,12 @@
 
 import { useEffect, useState } from "react";
 import { Menu, X, Lock, Send } from "lucide-react";
-import { getPublicKeyFingerprint } from "@/lib/crypto/fingerprint";
-
 
 import {
   StoredIdentity,
   UnlockedIdentity,
   loadIdentities,
   createIdentity,
-  getActiveIdentityId,
   setActiveIdentityId,
   updateIdentityLastActive,
   deleteIdentity,
@@ -37,7 +34,52 @@ import {
   encryptMessage,
 } from "@/lib/crypto/session";
 
-// For UI
+import { getPublicKeyFingerprint } from "@/lib/crypto/fingerprint";
+import { safeRandomId } from "@/lib/utils/id";
+
+// helper to copy text
+function copyToClipboard(text: string, label?: string) {
+  if (!text) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => {
+          if (label) {
+            console.log(`Copied ${label} to clipboard`);
+          }
+        },
+        (err) => {
+          console.warn("Clipboard write failed", err);
+          alert("Failed to copy to clipboard");
+        }
+      );
+      return;
+    }
+  } catch {
+    // fall through
+  }
+
+  // fallback
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand("copy");
+    if (label) console.log(`Copied ${label} to clipboard (fallback)`);
+  } catch (err) {
+    console.warn("execCommand copy failed", err);
+    alert("Failed to copy to clipboard");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
+// ---------- types ----------
+
 interface DecryptedMessage {
   id: string;
   direction: "out" | "in";
@@ -45,7 +87,7 @@ interface DecryptedMessage {
   timestamp: string;
 }
 
-// ---------- Create Identity Screen (with passphrase) ----------
+// ---------- Identity Create Screen ----------
 
 function IdentityCreateScreen({
   onCreated,
@@ -317,12 +359,12 @@ function IdentityVault({
         </p>
 
         {identities.length === 0 && (
-          <p className="text-sm text-zinc-500 mb-4">
+          <p className="mb-4 text-sm text-zinc-500">
             No identities yet. Create your first identity to start.
           </p>
         )}
 
-        <div className="space-y-2 max-h-72 overflow-y-auto mb-4">
+        <div className="mb-4 max-h-72 space-y-2 overflow-y-auto">
           {identities.map((id) => (
             <div
               key={id.id}
@@ -332,17 +374,17 @@ function IdentityVault({
                 <span className="text-sm font-medium">
                   {id.codename}
                 </span>
-                <span className="text-[10px] text-zinc-500 break-all">
+                <span className="break-all text-[10px] text-zinc-500">
                   {id.publicKey}
                 </span>
-                <span className="text-[10px] text-zinc-600 mt-1">
+                <span className="mt-1 text-[10px] text-zinc-600">
                   Last active:{" "}
                   {id.lastActiveAt
                     ? new Date(id.lastActiveAt).toLocaleString()
                     : "never"}
                 </span>
               </div>
-              <div className="flex flex-col gap-1 ml-2">
+              <div className="ml-2 flex flex-col gap-1">
                 <button
                   onClick={() => onActivate(id)}
                   className="rounded-md border border-cyan-500 px-3 py-1 text-xs text-cyan-300 hover:bg-cyan-500 hover:text-black"
@@ -371,6 +413,36 @@ function IdentityVault({
   );
 }
 
+// ---------- Contact bundle parser ----------
+
+function parseContactInput(
+  codenameInput: string,
+  publicKeyInput: string
+): { codename: string; publicKey: string } | null {
+  const c = codenameInput.trim();
+  const pk = publicKeyInput.trim();
+
+  // try bundle format first
+  if (pk.startsWith("e2ee-contact:v1:")) {
+    try {
+      const jsonPart = pk.slice("e2ee-contact:v1:".length);
+      const obj = JSON.parse(jsonPart);
+      if (typeof obj.codename === "string" && typeof obj.publicKey === "string") {
+        return {
+          codename: obj.codename,
+          publicKey: obj.publicKey,
+        };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // fallback: treat as separate codename + public key
+  if (!c || !pk) return null;
+  return { codename: c, publicKey: pk };
+}
+
 // ---------- Add Contact Modal ----------
 
 function AddContactModal({
@@ -387,14 +459,16 @@ function AddContactModal({
   const [loading, setLoading] = useState(false);
 
   const handleAdd = async () => {
-    if (!codename.trim() || !publicKey.trim()) return;
+    const parsed = parseContactInput(codename, publicKey);
+    if (!parsed) return;
+
     setLoading(true);
     try {
       await addContact(
         identity.id,
         identity.secretKey,
-        codename.trim(),
-        publicKey.trim()
+        parsed.codename,
+        parsed.publicKey
       );
       onAdded();
       onClose();
@@ -403,10 +477,26 @@ function AddContactModal({
     }
   };
 
+  // optional: auto-fill codename if bundle pasted
+  const handlePublicKeyChange = (value: string) => {
+    setPublicKey(value);
+    if (value.startsWith("e2ee-contact:v1:")) {
+      try {
+        const jsonPart = value.slice("e2ee-contact:v1:".length);
+        const obj = JSON.parse(jsonPart);
+        if (typeof obj.codename === "string") {
+          setCodename(obj.codename);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="w-full max-w-sm bg-zinc-900 border border-zinc-700 rounded-lg p-6">
-        <h2 className="text-lg font-medium mb-4 text-white">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="w-full max-w-sm rounded-lg border border-zinc-700 bg-zinc-900 p-6">
+        <h2 className="mb-4 text-lg font-medium text-white">
           Add Contact
         </h2>
 
@@ -414,17 +504,24 @@ function AddContactModal({
         <input
           value={codename}
           onChange={(e) => setCodename(e.target.value)}
-          className="w-full mb-3 rounded-md bg-black border border-zinc-700 px-3 py-2 text-sm"
+          className="mb-3 w-full rounded-md border border-zinc-700 bg-black px-3 py-2 text-sm"
         />
 
-        <label className="text-sm text-zinc-400">Public Key (base64)</label>
+        <label className="text-sm text-zinc-400">
+          Public Key or Contact Bundle
+        </label>
         <textarea
           value={publicKey}
-          onChange={(e) => setPublicKey(e.target.value)}
-          className="w-full h-24 rounded-md bg-black border border-zinc-700 px-3 py-2 text-sm"
+          onChange={(e) => handlePublicKeyChange(e.target.value)}
+          className="h-24 w-full rounded-md border border-zinc-700 bg-black px-3 py-2 text-sm"
         />
 
-        <div className="flex justify-end gap-2 mt-4">
+        <p className="mt-1 text-[10px] text-zinc-500">
+          You can paste either a raw public key or a contact bundle starting
+          with <span className="font-mono">e2ee-contact:v1:</span>.
+        </p>
+
+        <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
             className="px-3 py-2 text-sm text-zinc-400 hover:text-white"
@@ -433,8 +530,8 @@ function AddContactModal({
           </button>
           <button
             onClick={handleAdd}
-            disabled={loading || !codename.trim() || !publicKey.trim()}
-            className="px-3 py-2 text-sm bg-cyan-500 rounded-md text-black hover:bg-cyan-400 disabled:opacity-50"
+            disabled={loading}
+            className="rounded-md bg-cyan-500 px-3 py-2 text-sm text-black hover:bg-cyan-400 disabled:opacity-50"
           >
             {loading ? "Adding…" : "Add Contact"}
           </button>
@@ -444,7 +541,7 @@ function AddContactModal({
   );
 }
 
-// ---------- Encrypted Chat Shell (per unlocked identity) ----------
+// ---------- Chat Shell ----------
 
 function ChatShell({
   identity,
@@ -460,14 +557,21 @@ function ChatShell({
   const [input, setInput] = useState("");
   const [showAddContact, setShowAddContact] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+
   const [identityFp, setIdentityFp] = useState<string | null>(null);
   const [activeContactFp, setActiveContactFp] = useState<string | null>(null);
+
   const [ws, setWs] = useState<WebSocket | null>(null);
 
   const activeContact =
     contacts.find((c) => c.id === activeContactId) ?? null;
 
-  // Load contacts for this identity
+  const contactBundle = `e2ee-contact:v1:${JSON.stringify({
+    codename: identity.codename,
+    publicKey: identity.publicKey,
+  })}`;
+
+  // load contacts
   useEffect(() => {
     const loaded = loadContacts(identity.id);
     setContacts(loaded);
@@ -476,7 +580,7 @@ function ChatShell({
     }
   }, [identity.id]);
 
-  // Load & decrypt messages for active contact
+  // load & decrypt messages for active contact
   useEffect(() => {
     async function loadAndDecrypt() {
       if (!activeContact || !activeContact.sharedKey) {
@@ -512,152 +616,9 @@ function ChatShell({
     loadAndDecrypt();
   }, [activeContactId, activeContact?.sharedKey]);
 
-  // Poll relay for incoming messages
-  // useEffect(() => {
-  //   const interval = setInterval(async () => {
-  //     try {
-  //       const res = await fetch(`/api/messages?for=${identity.publicKey}`);
-  //       if (!res.ok) return;
-  //       const data = await res.json();
-  //       if (!data.messages?.length) return;
-
-  //       for (const m of data.messages as {
-  //         from: string;
-  //         to: string;
-  //         ciphertext: string;
-  //         nonce: string;
-  //         timestamp: string;
-  //       }[]) {
-  //         const contact = contacts.find((c) => c.publicKey === m.from);
-  //         if (!contact || !contact.sharedKey) continue;
-
-  //         const plaintext = await decryptMessage(
-  //           contact.sharedKey,
-  //           m.nonce,
-  //           m.ciphertext
-  //         );
-
-  //         addMessageForContact(
-  //           contact.id,
-  //           "in",
-  //           m.ciphertext,
-  //           m.nonce,
-  //           m.timestamp
-  //         );
-
-  //         if (contact.id === activeContactId) {
-  //           setMessages((prev) => [
-  //             ...prev,
-  //             {
-  //               id: crypto.randomUUID(),
-  //               direction: "in",
-  //               plaintext,
-  //               timestamp: m.timestamp,
-  //             },
-  //           ]);
-  //         }
-  //       }
-  //     } catch (err) {
-  //       console.error("Polling error:", err);
-  //     }
-  //   }, 2000);
-
-  //   return () => clearInterval(interval);
-  // }, [identity.publicKey, contacts, activeContactId]);
-
-    // WebSocket connection to relay
-    useEffect(() => {
-      // Only run in browser
-      if (typeof window === "undefined") return;
-
-      let closed = false;
-      const socket = new WebSocket("ws://localhost:4000");
-
-      socket.onopen = () => {
-        console.log("[client] ws connected, registering identity");
-
-        socket.send(
-          JSON.stringify({
-            type: "register",
-            publicKey: identity.publicKey,
-          })
-        );
-      };
-
-      socket.onclose = () => {
-        console.log("[client] ws closed");
-      };
-
-      socket.onerror = (event) => {
-        console.warn("[client] ws error", event.type);
-      };
-
-
-      // Handle incoming E2EE messages
-      socket.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === "message") {
-            const { from, ciphertext, nonce, timestamp } = data;
-
-            // find matching contact by sender's public key
-            const contact = contacts.find((c) => c.publicKey === from);
-            if (!contact || !contact.sharedKey) {
-              console.warn("[client] incoming msg from unknown or unshared contact");
-              return;
-            }
-
-            // decrypt
-            const plaintext = await decryptMessage(
-              contact.sharedKey,
-              nonce,
-              ciphertext
-            );
-
-            // store encrypted locally (for history)
-            addMessageForContact(
-              contact.id,
-              "in",
-              ciphertext,
-              nonce,
-              timestamp
-            );
-
-            // update UI if this contact is open
-            if (contact.id === activeContactId) {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  direction: "in",
-                  plaintext,
-                  timestamp,
-                },
-              ]);
-            }
-          }
-        } catch (err) {
-          console.error("[client] ws onmessage error", err);
-        }
-      };
-
-      setWs(socket);
-
-      return () => {
-        closed = true;
-        try {
-          socket.close();
-        } catch {}
-        setWs(null);
-      };
-    }, [identity.publicKey, contacts, activeContactId]);
-
-
-  // fingerprint for active identity
+  // identity fingerprint
   useEffect(() => {
     let cancelled = false;
-
     getPublicKeyFingerprint(identity.publicKey)
       .then((fp) => {
         if (!cancelled) setIdentityFp(fp);
@@ -666,21 +627,18 @@ function ChatShell({
         console.error("Failed to compute identity fingerprint", err);
         if (!cancelled) setIdentityFp(null);
       });
-
     return () => {
       cancelled = true;
     };
   }, [identity.publicKey]);
 
-  // fingerprint for active contact
+  // active contact fingerprint
   useEffect(() => {
     let cancelled = false;
-
     if (!activeContact) {
       setActiveContactFp(null);
       return;
     }
-
     getPublicKeyFingerprint(activeContact.publicKey)
       .then((fp) => {
         if (!cancelled) setActiveContactFp(fp);
@@ -695,64 +653,153 @@ function ChatShell({
     };
   }, [activeContact?.publicKey]);
 
+  // WebSocket connection
+  useEffect(() => {
+    if (typeof window === "undefined") return;
 
-    const handleSend = async () => {
-      if (!activeContact || !activeContact.sharedKey) return;
-      const text = input.trim();
-      if (!text) return;
+    const host = window.location.hostname;
+    const isOnion = host.endsWith(".onion");
 
-      setInput("");
+    const url =
+      (process.env.NEXT_PUBLIC_RELAY_WS_URL as string | undefined) ||
+      (isOnion ? `ws://${host}:4000` : "ws://localhost:4000");
 
-      const now = new Date().toISOString();
-      const encrypted = await encryptMessage(activeContact.sharedKey, text);
+    let socket: WebSocket | null = null;
 
-      // store locally (encrypted)
-      addMessageForContact(
-        activeContact.id,
-        "out",
-        encrypted.ciphertext,
-        encrypted.nonce,
-        now
+    try {
+      socket = new WebSocket(url);
+    } catch (err) {
+      console.warn("[client] failed to open WebSocket", err);
+      return;
+    }
+
+    socket.onopen = () => {
+      console.log("[client] ws connected to", url);
+      socket!.send(
+        JSON.stringify({
+          type: "register",
+          publicKey: identity.publicKey,
+        })
       );
-
-      // optimistic UI
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          direction: "out",
-          plaintext: text,
-          timestamp: now,
-        },
-      ]);
-
-      // 🔥 send to relay via WebSocket
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "message",
-            from: identity.publicKey,
-            to: activeContact.publicKey,
-            ciphertext: encrypted.ciphertext,
-            nonce: encrypted.nonce,
-            timestamp: now,
-          })
-        );
-      } else {
-        console.warn("[client] ws not connected, message not relayed");
-      }
-
-      updateIdentityLastActive(identity.id);
     };
 
+    socket.onclose = () => {
+      console.log("[client] ws closed");
+    };
+
+    socket.onerror = (event) => {
+      console.warn("[client] ws error", (event as any).type);
+    };
+
+    socket.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.type === "message") {
+          const { from, ciphertext, nonce, timestamp } = data;
+
+          const contact = contacts.find((c) => c.publicKey === from);
+          if (!contact || !contact.sharedKey) {
+            console.warn(
+              "[client] incoming msg from unknown/unshared contact"
+            );
+            return;
+          }
+
+          const plaintext = await decryptMessage(
+            contact.sharedKey,
+            nonce,
+            ciphertext
+          );
+
+          addMessageForContact(
+            contact.id,
+            "in",
+            ciphertext,
+            nonce,
+            timestamp
+          );
+
+          if (contact.id === activeContactId) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: safeRandomId(),
+                direction: "in",
+                plaintext,
+                timestamp,
+              },
+            ]);
+          }
+        }
+      } catch (err) {
+        console.error("[client] ws onmessage error", err);
+      }
+    };
+
+    setWs(socket);
+
+    return () => {
+      try {
+        socket?.close();
+      } catch {}
+      setWs(null);
+    };
+  }, [identity.publicKey, contacts, activeContactId]);
+
+  const handleSend = async () => {
+    if (!activeContact || !activeContact.sharedKey) return;
+    const text = input.trim();
+    if (!text) return;
+
+    setInput("");
+
+    const now = new Date().toISOString();
+    const encrypted = await encryptMessage(activeContact.sharedKey, text);
+
+    addMessageForContact(
+      activeContact.id,
+      "out",
+      encrypted.ciphertext,
+      encrypted.nonce,
+      now
+    );
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: safeRandomId(),
+        direction: "out",
+        plaintext: text,
+        timestamp: now,
+      },
+    ]);
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "message",
+          from: identity.publicKey,
+          to: activeContact.publicKey,
+          ciphertext: encrypted.ciphertext,
+          nonce: encrypted.nonce,
+          timestamp: now,
+        })
+      );
+    } else {
+      console.warn("[client] ws not connected, message not relayed");
+    }
+
+    updateIdentityLastActive(identity.id);
+  };
 
   return (
     <div className="flex h-screen bg-black text-white">
       {/* Sidebar */}
       <div
-        className={`fixed md:relative z-50 md:z-auto transition-all duration-300 h-full ${
+        className={`fixed h-full overflow-hidden border-r border-zinc-800 bg-zinc-950 transition-all duration-300 md:relative md:z-auto ${
           sidebarOpen ? "w-80" : "w-0"
-        } bg-zinc-950 border-r border-zinc-800 overflow-hidden`}
+        }`}
       >
         <div className="flex h-full flex-col">
           {/* Sidebar header */}
@@ -771,18 +818,41 @@ function ChatShell({
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <p className="text-xs text-zinc-500">
-              Active identity:{" "}
-              <span className="font-mono text-cyan-400">
-                {identity.codename}
+
+            <p className="flex items-center gap-2 text-xs text-zinc-500">
+              <span>
+                Active identity:{" "}
+                <span className="font-mono text-cyan-400">
+                  {identity.codename}
+                </span>
               </span>
+              <button
+                type="button"
+                onClick={() =>
+                  copyToClipboard(identity.codename, "codename")
+                }
+                className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-cyan-500 hover:text-cyan-300"
+              >
+                Copy
+              </button>
             </p>
-            <p className="mt-1 text-[10px] text-zinc-500 break-all">
+
+            <p className="mt-1 break-all text-[10px] text-zinc-500">
               Public key:{" "}
               <span className="font-mono text-[10px] text-zinc-400">
                 {identity.publicKey}
               </span>
             </p>
+            <button
+              type="button"
+              onClick={() =>
+                copyToClipboard(identity.publicKey, "public key")
+              }
+              className="mt-1 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-cyan-500 hover:text-cyan-300 text-[10px]"
+            >
+              Copy public key
+            </button>
+
             <p className="mt-1 text-[10px] text-zinc-500">
               Safety code:{" "}
               <span className="font-mono text-[10px] text-cyan-400">
@@ -790,25 +860,39 @@ function ChatShell({
               </span>
             </p>
 
-            <p className="mt-1 text-[10px] text-zinc-500 break-all">
-              Public key:{" "}
-              <span className="font-mono text-[10px] text-zinc-400">
-                {identity.publicKey}
-              </span>
-            </p>
+            <div className="mt-3 rounded border border-zinc-800 bg-zinc-900 p-2">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-zinc-400">
+                  SHARE CONTACT BUNDLE
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyToClipboard(contactBundle, "contact bundle")
+                  }
+                  className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-cyan-500 hover:text-cyan-300"
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="line-clamp-3 break-all text-[10px] text-zinc-500">
+                {contactBundle}
+              </p>
+            </div>
+
             <button
               onClick={() => setShowAddContact(true)}
-              className="mt-2 px-2 py-1 bg-zinc-800 text-xs rounded border border-zinc-700 hover:border-cyan-500"
+              className="mt-3 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-300 hover:border-cyan-500"
             >
               + Add Contact
             </button>
           </div>
 
-          {/* Contacts as conversations */}
-          <div className="flex-1 overflow-y-auto divide-y divide-zinc-800">
+          {/* Contacts */}
+          <div className="flex-1 divide-y divide-zinc-800 overflow-y-auto">
             {contacts.length === 0 && (
               <div className="p-4 text-xs text-zinc-500">
-                No contacts yet. Share your public key with someone and add
+                No contacts yet. Share your bundle or public key and add
                 them here.
               </div>
             )}
@@ -825,7 +909,7 @@ function ChatShell({
                     : "border-transparent hover:bg-zinc-900/50"
                 }`}
               >
-                <div className="flex items-start justify-between mb-1">
+                <div className="mb-1 flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 text-sm font-bold uppercase">
                       {c.codename.slice(0, 2)}
@@ -834,7 +918,7 @@ function ChatShell({
                       <span className="text-sm font-medium text-white">
                         {c.codename}
                       </span>
-                      <span className="text-[10px] text-zinc-500 truncate max-w-[160px]">
+                      <span className="max-w-[160px] truncate text-[10px] text-zinc-500">
                         {c.publicKey}
                       </span>
                     </div>
@@ -852,7 +936,7 @@ function ChatShell({
 
           {/* Sidebar footer */}
           <div className="border-t border-zinc-800 p-4">
-            <div className="rounded border border-zinc-800 bg-zinc-900 p-3 mb-2">
+            <div className="mb-2 rounded border border-zinc-800 bg-zinc-900 p-3">
               <div className="mb-2 flex items-center gap-2">
                 <Lock className="h-3 w-3 text-cyan-400" />
                 <span className="text-xs font-semibold text-cyan-400">
@@ -860,8 +944,8 @@ function ChatShell({
                 </span>
               </div>
               <p className="text-xs text-zinc-500">
-                Secret keys are encrypted with your passphrase. Messages are
-                encrypted end-to-end with derived shared keys.
+                Secret keys are encrypted with your passphrase. Messages
+                are encrypted end-to-end with derived shared keys.
               </p>
             </div>
             <button
@@ -920,9 +1004,9 @@ function ChatShell({
           </div>
         </div>
 
-        {/* Messages area */}
-        <div className="flex-1 flex flex-col">
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {/* Messages + input */}
+        <div className="flex flex-1 flex-col">
+          <div className="flex-1 space-y-2 overflow-y-auto p-4">
             {!activeContact && (
               <div className="flex h-full items-center justify-center">
                 <div className="text-center">
@@ -933,15 +1017,17 @@ function ChatShell({
                     Select a contact from the left.
                   </p>
                   <p className="mt-2 text-xs text-zinc-500">
-                    Share your public key, exchange theirs, and add them to
-                    start a secure chat.
+                    Share your contact bundle, exchange theirs, and add
+                    them to start a secure chat.
                   </p>
                 </div>
               </div>
             )}
 
             {activeContact && loadingMessages && (
-              <p className="text-xs text-zinc-500">Decrypting messages…</p>
+              <p className="text-xs text-zinc-500">
+                Decrypting messages…
+              </p>
             )}
 
             {activeContact &&
@@ -956,10 +1042,10 @@ function ChatShell({
                   }`}
                 >
                   <div
-                    className={`max-w-xs md:max-w-md px-3 py-2 rounded-lg text-sm ${
+                    className={`max-w-xs rounded-lg px-3 py-2 text-sm md:max-w-md ${
                       m.direction === "out"
-                        ? "bg-cyan-600/20 border border-cyan-500/40 text-white"
-                        : "bg-zinc-900 border border-zinc-800 text-zinc-100"
+                        ? "border border-cyan-500/40 bg-cyan-600/20 text-white"
+                        : "border border-zinc-800 bg-zinc-900 text-zinc-100"
                     }`}
                   >
                     <p>{m.plaintext}</p>
@@ -970,15 +1056,16 @@ function ChatShell({
                 </div>
               ))}
 
-            {activeContact && !loadingMessages && messages.length === 0 && (
-              <p className="text-xs text-zinc-500">
-                No messages yet. Your first message will be encrypted with
-                the shared key.
-              </p>
-            )}
+            {activeContact &&
+              !loadingMessages &&
+              messages.length === 0 && (
+                <p className="text-xs text-zinc-500">
+                  No messages yet. Your first message will be encrypted
+                  with the shared key.
+                </p>
+              )}
           </div>
 
-          {/* Input */}
           {activeContact && (
             <div className="border-t border-zinc-800 bg-zinc-900 p-3">
               <div className="flex items-center gap-2">
@@ -992,12 +1079,12 @@ function ChatShell({
                     }
                   }}
                   placeholder="Type a message (encrypted)…"
-                  className="flex-1 rounded-md bg-black border border-zinc-700 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+                  className="flex-1 rounded-md border border-zinc-700 bg-black px-3 py-2 text-sm outline-none focus:border-cyan-500"
                 />
                 <button
                   onClick={handleSend}
                   disabled={!input.trim() || !activeContact.sharedKey}
-                  className="flex items-center justify-center h-10 w-10 rounded-md bg-cyan-500 text-black hover:bg-cyan-400 disabled:opacity-50"
+                  className="flex h-10 w-10 items-center justify-center rounded-md bg-cyan-500 text-black hover:bg-cyan-400 disabled:opacity-50"
                 >
                   <Send className="h-4 w-4" />
                 </button>
@@ -1005,8 +1092,8 @@ function ChatShell({
               <div className="mt-1 flex items-center gap-1 text-[10px] text-zinc-500">
                 <Lock className="h-3 w-3 text-cyan-400" />
                 <span>
-                  Messages are encrypted with a shared key derived from your
-                  secret key and their public key.
+                  Messages are encrypted with a shared key derived from
+                  your secret key and their public key.
                 </span>
               </div>
             </div>

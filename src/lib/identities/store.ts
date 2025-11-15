@@ -2,6 +2,7 @@
 "use client";
 
 import sodium from "libsodium-wrappers-sumo";
+import { safeRandomId } from "@/lib/utils/id";
 import {
   CryptoIdentity,
   generateCryptoIdentity,
@@ -211,7 +212,7 @@ export async function createIdentity(
     await encryptSecretKeyWithPassphrase(base.secretKey, passphrase);
 
   const stored: StoredIdentity = {
-    id: crypto.randomUUID(),
+    id: safeRandomId(),
     codename,
     publicKey: base.publicKey,
     encryptedSecretKey,
