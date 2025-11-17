@@ -980,7 +980,7 @@ function ChatShell({
     setGroupChats(loadedGroups);
   }, [identity.id]);
 
-  useEffect(() => {
+    useEffect(() => {
     if (typeof window === "undefined") return;
 
     const host = window.location.hostname;
@@ -1094,12 +1094,57 @@ function ChatShell({
         if (data.type === "group-event") {
           const evt = data.event as GroupEvent;
 
+          // Apply event to local group store
           const updated = applyGroupEvent(
             identity.id,
             identity.publicKey,
             evt
           );
           setGroupChats(updated);
+
+          // 🔸 NEW: auto-create contacts for all other members in the group
+          // so every pair has a sharedKey, even if user didn't add manually.
+          if (evt.type === "create" && Array.isArray((evt as any).members)) {
+            const members: string[] = (evt as any).members;
+
+            // current contacts in store
+            const existing = loadContacts(identity.id);
+
+            const missing = members.filter(
+              (pk) =>
+                pk !== identity.publicKey &&
+                !existing.some((c) => c.publicKey === pk)
+            );
+
+            if (missing.length > 0) {
+              console.log(
+                "[client] auto-adding contacts for group members",
+                missing.map((pk) => pk.slice(0, 16) + "…")
+              );
+
+              // create simple auto codenames like member-xxxx
+              for (const pk of missing) {
+                const autoName = `member-${pk.slice(0, 8)}`;
+                try {
+                  await addContact(
+                    identity.id,
+                    identity.secretKey,
+                    autoName,
+                    pk
+                  );
+                } catch (err) {
+                  console.warn(
+                    "[client] failed auto-add contact for group member",
+                    pk.slice(0, 16),
+                    err
+                  );
+                }
+              }
+
+              // refresh contacts state from store
+              setContacts(loadContacts(identity.id));
+            }
+          }
 
           console.log(
             "[client] applied group-event",
@@ -1125,11 +1170,13 @@ function ChatShell({
   }, [
     identity.id,
     identity.publicKey,
+    identity.secretKey,   // 🔸 NEW: depends on secretKey too now
     contacts,
     activeContactId,
     groupChats,
     activeGroupId,
   ]);
+
 
   const handleSend = async () => {
     const text = input.trim();
