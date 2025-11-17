@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { Menu, X, Lock, Send, ChevronDown, Copy, Check, Zap } from 'lucide-react';
-import { toast } from 'sonner';
-import { Toaster } from 'sonner';
+import { Menu, X, Lock, Send, ChevronDown, Copy, Check } from "lucide-react";
+import { toast, Toaster } from "sonner";
 import QRCode from "react-qr-code";
 
 import {
@@ -31,15 +30,24 @@ import {
   StoredMessage,
 } from "@/lib/messages/store";
 
+import { decryptMessage, encryptMessage } from "@/lib/crypto/session";
+
 import {
-  decryptMessage,
-  encryptMessage,
-} from "@/lib/crypto/session";
+  GroupChat,
+  loadGroups,
+  createGroup,
+  applyGroupEvent,
+  GroupEvent,
+} from "@/lib/groups/store";
+
+import { ensureSelfSenderKeyState } from "@/lib/groups/senderKeys";
 
 import { getPublicKeyFingerprint } from "@/lib/crypto/fingerprint";
 import { safeRandomId } from "@/lib/utils/id";
 
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+// ───────────────────────────────────────────────
+// Utility: copy to clipboard
+// ───────────────────────────────────────────────
 
 function copyToClipboard(text: string, label?: string) {
   if (!text) return;
@@ -96,14 +104,16 @@ function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ───────────────────────────────────────────────
+// UI components
+// ───────────────────────────────────────────────
+
 function MessageGroup({
   messages,
   direction,
-  contact,
 }: {
   messages: DecryptedMessage[];
   direction: "in" | "out";
-  contact?: Contact;
 }) {
   const firstTime = new Date(messages[0].timestamp);
   const timeStr = firstTime.toLocaleTimeString([], {
@@ -112,7 +122,11 @@ function MessageGroup({
   });
 
   return (
-    <div className={`flex ${direction === "out" ? "justify-end" : "justify-start"} group mb-3`}>
+    <div
+      className={`flex ${
+        direction === "out" ? "justify-end" : "justify-start"
+      } group mb-3`}
+    >
       <div
         className={`rounded px-5 py-3 space-y-2 max-w-2xl border transition-all hover:shadow-lg ${
           direction === "out"
@@ -121,13 +135,18 @@ function MessageGroup({
         }`}
       >
         {messages.map((m) => (
-          <p key={m.id} className="whitespace-pre-wrap text-sm break-words leading-relaxed font-mono">
+          <p
+            key={m.id}
+            className="whitespace-pre-wrap text-sm break-words leading-relaxed font-mono"
+          >
             {m.plaintext}
           </p>
         ))}
-        <p className={`text-xs mt-3 transition-opacity opacity-70 group-hover:opacity-100 font-mono ${
-          direction === "out" ? "text-orange-400/60" : "text-neutral-500"
-        }`}>
+        <p
+          className={`text-xs mt-3 transition-opacity opacity-70 group-hover:opacity-100 font-mono ${
+            direction === "out" ? "text-orange-400/60" : "text-neutral-500"
+          }`}
+        >
           {timeStr}
         </p>
       </div>
@@ -199,6 +218,10 @@ function CollapsibleSection({
   );
 }
 
+// ───────────────────────────────────────────────
+// Identity screens
+// ───────────────────────────────────────────────
+
 function IdentityCreateScreen({
   onCreated,
   onBackToVaultIfAny,
@@ -262,11 +285,10 @@ function IdentityCreateScreen({
             CREATE SECURE IDENTITY
           </h1>
         </div>
-        <h2 className="mb-2 text-lg font-bold text-white">
-          Initialize New Agent
-        </h2>
+        <h2 className="mb-2 text-lg font-bold text-white">Initialize New Agent</h2>
         <p className="mb-6 text-sm text-neutral-400 leading-relaxed">
-          Secret keys are encrypted with your passphrase and stored locally in this browser.
+          Secret keys are encrypted with your passphrase and stored locally in
+          this browser.
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -316,7 +338,9 @@ function IdentityCreateScreen({
           </div>
 
           {error && (
-            <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2">{error}</p>
+            <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2">
+              {error}
+            </p>
           )}
 
           <button
@@ -388,11 +412,10 @@ function UnlockIdentityScreen({
             UNLOCK IDENTITY
           </h1>
         </div>
-        <h2 className="mb-2 text-lg font-bold text-white">
-          {identity.codename}
-        </h2>
+        <h2 className="mb-2 text-lg font-bold text-white">{identity.codename}</h2>
         <p className="mb-6 text-sm text-neutral-400 leading-relaxed">
-          Enter your passphrase to unlock this secure identity. Secret keys never leave this browser.
+          Enter your passphrase to unlock this secure identity. Secret keys never
+          leave this browser.
         </p>
 
         <form onSubmit={handleUnlock} className="space-y-4">
@@ -409,7 +432,9 @@ function UnlockIdentityScreen({
           </div>
 
           {error && (
-            <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2">{error}</p>
+            <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2">
+              {error}
+            </p>
           )}
 
           <div className="flex gap-2 pt-2">
@@ -454,11 +479,10 @@ function IdentityVault({
             IDENTITY VAULT
           </h1>
         </div>
-        <h2 className="mb-2 text-lg font-bold text-white">
-          Select Active Identity
-        </h2>
+        <h2 className="mb-2 text-lg font-bold text-white">Select Active Identity</h2>
         <p className="mb-6 text-sm text-neutral-400 leading-relaxed">
-          Each identity maintains separate keys, contacts, and encrypted message history.
+          Each identity maintains separate keys, contacts, and encrypted message
+          history.
         </p>
 
         {identities.length === 0 && (
@@ -478,13 +502,16 @@ function IdentityVault({
                   <span className="text-sm font-bold text-white">
                     {id.codename}
                   </span>
-                  <div className="h-2 w-2 bg-orange-500 rounded-full"></div>
+                  <div className="h-2 w-2 bg-orange-500 rounded-full" />
                 </div>
                 <span className="block truncate text-xs text-neutral-500 font-mono">
                   {id.publicKey}
                 </span>
                 <span className="block text-xs text-neutral-600 mt-1">
-                  Last active: {id.lastActiveAt ? new Date(id.lastActiveAt).toLocaleString() : "never"}
+                  Last active:{" "}
+                  {id.lastActiveAt
+                    ? new Date(id.lastActiveAt).toLocaleString()
+                    : "never"}
                 </span>
               </div>
               <div className="ml-4 flex flex-col gap-2">
@@ -515,6 +542,10 @@ function IdentityVault({
     </div>
   );
 }
+
+// ───────────────────────────────────────────────
+// Contacts / Groups modals
+// ───────────────────────────────────────────────
 
 function parseContactInput(
   codenameInput: string,
@@ -596,7 +627,9 @@ function AddContactModal({
           ADD CONTACT
         </h2>
 
-        <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2 block">Contact Codename</label>
+        <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2 block">
+          Contact Codename
+        </label>
         <input
           value={codename}
           onChange={(e) => setCodename(e.target.value)}
@@ -613,7 +646,8 @@ function AddContactModal({
         />
 
         <p className="mt-2 text-xs text-neutral-500">
-          Paste a raw public key or contact bundle starting with <span className="font-bold text-orange-500">e2ee-contact:v1:</span>
+          Paste a raw public key or contact bundle starting with{" "}
+          <span className="font-bold text-orange-500">e2ee-contact:v1:</span>
         </p>
 
         <div className="mt-6 flex justify-end gap-2">
@@ -636,6 +670,141 @@ function AddContactModal({
   );
 }
 
+// Group creation modal – only creates locally, broadcasting is done in ChatShell
+function CreateGroupModal({
+  identity,
+  contacts,
+  onClose,
+  onCreated,
+}: {
+  identity: UnlockedIdentity;
+  contacts: Contact[];
+  onClose: () => void;
+  onCreated: (group: GroupChat) => void;
+}) {
+  const [name, setName] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggleContact = (publicKey: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(publicKey)) next.delete(publicKey);
+      else next.add(publicKey);
+      return next;
+    });
+  };
+
+  const handleCreate = () => {
+    setError(null);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Group name is required");
+      return;
+    }
+    if (selected.size === 0) {
+      setError("Select at least one contact");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const memberPublicKeys = [identity.publicKey, ...Array.from(selected)];
+      const group = createGroup(identity.id, trimmed, memberPublicKeys);
+
+      onCreated(group);
+      onClose();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to create group");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="w-full max-w-sm rounded border border-neutral-700 bg-neutral-900 p-6 font-mono shadow-xl max-h-[80vh] overflow-y-auto">
+        <h2 className="mb-4 text-sm font-bold text-orange-400 uppercase tracking-widest">
+          CREATE GROUP
+        </h2>
+
+        <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2 block">
+          Group Name
+        </label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mb-4 w-full rounded border border-neutral-700 bg-black px-3 py-2 text-sm font-mono text-white outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+          placeholder="e.g. security-team"
+        />
+
+        <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2 block">
+          Members (contacts)
+        </label>
+        <div className="max-h-40 overflow-y-auto mb-3 space-y-1">
+          {contacts.length === 0 && (
+            <p className="text-xs text-neutral-500">
+              You have no contacts yet. Add contacts first.
+            </p>
+          )}
+          {contacts.map((c) => {
+            const checked = selected.has(c.publicKey);
+            return (
+              <label
+                key={c.id}
+                className="flex items-center gap-2 text-xs text-neutral-200 cursor-pointer hover:bg-neutral-800/60 px-2 py-1 rounded"
+              >
+                <input
+                  type="checkbox"
+                  className="h-3 w-3"
+                  checked={checked}
+                  onChange={() => toggleContact(c.publicKey)}
+                />
+                <span className="font-bold truncate">{c.codename}</span>
+                <span className="text-[9px] text-neutral-500 truncate">
+                  {c.publicKey.slice(0, 12)}…
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <p className="text-[10px] text-neutral-500 mb-2">
+          Your own identity is always included as a member.
+        </p>
+
+        {error && (
+          <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2 mb-2">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 text-xs font-medium text-neutral-400 hover:text-white transition-colors"
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={loading || contacts.length === 0}
+            className="rounded bg-orange-500 px-4 py-2 text-xs font-bold text-black hover:bg-orange-400 transition-colors disabled:opacity-50"
+          >
+            {loading ? "CREATING…" : "CREATE GROUP"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────
+// Main chat shell
+// ───────────────────────────────────────────────
+
 function ChatShell({
   identity,
   onBackToVault,
@@ -646,6 +815,10 @@ function ChatShell({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeContactId, setActiveContactId] = useState<string | null>(null);
+  const [groupChats, setGroupChats] = useState<GroupChat[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"contacts" | "groups">("contacts");
+
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [input, setInput] = useState("");
   const [showAddContact, setShowAddContact] = useState(false);
@@ -655,13 +828,15 @@ function ChatShell({
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [showIdentityDetails, setShowIdentityDetails] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
 
-  const inactivityTimerRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [timeLeft, setTimeLeft] = useState(INACTIVITY_TIMEOUT_MS);
-  
+
   const activeContact =
-    contacts.find((c) => c.id === activeContactId) ?? null;
+    contacts.find((c) => c.id === activeContactId) || undefined;
+
+  const activeGroup =
+    groupChats.find((g) => g.id === activeGroupId) || undefined;
 
   const contactBundle = `e2ee-contact:v1:${JSON.stringify({
     codename: identity.codename,
@@ -673,7 +848,11 @@ function ChatShell({
     if (
       lastGroup &&
       lastGroup.direction === msg.direction &&
-      new Date(msg.timestamp).getTime() - new Date(lastGroup.messages[lastGroup.messages.length - 1].timestamp).getTime() < 60000
+      new Date(msg.timestamp).getTime() -
+        new Date(
+          lastGroup.messages[lastGroup.messages.length - 1].timestamp
+        ).getTime() <
+        60_000
     ) {
       lastGroup.messages.push(msg);
     } else {
@@ -695,18 +874,39 @@ function ChatShell({
     if (loaded.length > 0 && !activeContactId) {
       setActiveContactId(loaded[0].id);
     }
-  }, [identity.id]);
+  }, [identity.id, activeContactId]);
 
   useEffect(() => {
     async function loadAndDecrypt() {
+      // GROUP CHAT MODE: currently we don't have local history for groups,
+      // just ensure sender key exists, then clear messages.
+      if (activeGroup) {
+        setMessages([]);
+
+        try {
+          await ensureSelfSenderKeyState(
+            identity.id,
+            activeGroup.id,
+            identity.publicKey
+          );
+        } catch (err) {
+          console.error("Failed to initialize sender key for group", err);
+        }
+
+        return;
+      }
+
+      // DIRECT MESSAGE MODE
       if (!activeContact || !activeContact.sharedKey) {
         setMessages([]);
         return;
       }
+
       setLoadingMessages(true);
       try {
         const stored = loadMessagesForContact(activeContact.id);
         const decrypted: DecryptedMessage[] = [];
+
         for (const m of stored as StoredMessage[]) {
           try {
             const plaintext = await decryptMessage(
@@ -724,13 +924,21 @@ function ChatShell({
             console.error("Failed to decrypt message", err);
           }
         }
+
         setMessages(decrypted);
       } finally {
         setLoadingMessages(false);
       }
     }
+
     loadAndDecrypt();
-  }, [activeContactId, activeContact?.sharedKey]);
+  }, [
+    activeContact?.sharedKey,
+    activeContactId,
+    activeGroup?.id,
+    identity.id,
+    identity.publicKey,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -766,6 +974,11 @@ function ChatShell({
       cancelled = true;
     };
   }, [activeContact?.publicKey]);
+
+  useEffect(() => {
+    const loadedGroups = loadGroups(identity.id);
+    setGroupChats(loadedGroups);
+  }, [identity.id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -808,8 +1021,9 @@ function ChatShell({
       try {
         const data = JSON.parse(event.data);
 
+        // 1) Direct + group messages
         if (data.type === "message") {
-          const { from, ciphertext, nonce, timestamp } = data;
+          const { from, ciphertext, nonce, timestamp, groupId } = data;
 
           const contact = contacts.find((c) => c.publicKey === from);
           if (!contact || !contact.sharedKey) {
@@ -825,6 +1039,34 @@ function ChatShell({
             ciphertext
           );
 
+          // Group message path
+          if (groupId) {
+            const group = groupChats.find((g) => g.id === groupId);
+            if (!group) {
+              console.warn(
+                "[client] incoming group msg for unknown group",
+                groupId
+              );
+              return;
+            }
+
+            if (activeGroupId === groupId) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: safeRandomId(),
+                  direction: "in",
+                  plaintext,
+                  timestamp,
+                },
+              ]);
+            }
+
+            // For now, no disk persistence for group messages.
+            return;
+          }
+
+          // Normal direct message
           addMessageForContact(
             contact.id,
             "in",
@@ -844,6 +1086,28 @@ function ChatShell({
               },
             ]);
           }
+
+          return;
+        }
+
+        // 2) Group events (create, rename, membership changes, etc.)
+        if (data.type === "group-event") {
+          const evt = data.event as GroupEvent;
+
+          const updated = applyGroupEvent(
+            identity.id,
+            identity.publicKey,
+            evt
+          );
+          setGroupChats(updated);
+
+          console.log(
+            "[client] applied group-event",
+            evt.type,
+            "groupId=",
+            evt.groupId
+          );
+          return;
         }
       } catch (err) {
         console.error("[client] ws onmessage error", err);
@@ -858,93 +1122,90 @@ function ChatShell({
       } catch {}
       setWs(null);
     };
-  }, [identity.publicKey, contacts, activeContactId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    function resetTimer() {
-      if (inactivityTimerRef.current !== null) {
-        window.clearTimeout(inactivityTimerRef.current);
-      }
-
-      // Reset visible countdown
-      setTimeLeft(INACTIVITY_TIMEOUT_MS);
-
-      inactivityTimerRef.current = window.setTimeout(() => {
-        toast.warning("Session locked due to inactivity", {
-          description: "Unlock your identity to continue chatting.",
-        });
-        onBackToVault();
-      }, INACTIVITY_TIMEOUT_MS);
-    }
-
-    function handleActivity() {
-      resetTimer();
-    }
-
-    // Window events
-    const winEvents: (keyof WindowEventMap)[] = [
-      "mousemove",
-      "mousedown",
-      "keydown",
-      "scroll",
-      "click",
-      "touchstart",
-    ];
-
-    winEvents.forEach((evt) =>
-      window.addEventListener(evt, handleActivity, { passive: true })
-    );
-
-    // Document event
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") {
-        resetTimer();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    // Start timer
-    resetTimer();
-
-    // Add a 1-second interval to update countdown
-    const interval = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1000) return 0;
-        return prev - 1000;
-      });
-    }, 1000);
-
-    return () => {
-      winEvents.forEach((evt) =>
-        window.removeEventListener(evt, handleActivity)
-      );
-      document.removeEventListener("visibilitychange", handleVisibility);
-      if (inactivityTimerRef.current !== null) {
-        window.clearTimeout(inactivityTimerRef.current);
-      }
-      clearInterval(interval);
-    };
-  }, [onBackToVault]);
-
-  function formatTime(ms: number) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const min = Math.floor(totalSeconds / 60);
-    const sec = totalSeconds % 60;
-    return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  }
-
+  }, [
+    identity.id,
+    identity.publicKey,
+    contacts,
+    activeContactId,
+    groupChats,
+    activeGroupId,
+  ]);
 
   const handleSend = async () => {
-    if (!activeContact || !activeContact.sharedKey) return;
     const text = input.trim();
     if (!text) return;
 
+    const now = new Date().toISOString();
+
+    // GROUP CHAT MODE
+    if (activeGroup) {
+      setInput("");
+
+      // Optimistic local echo
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: safeRandomId(),
+          direction: "out",
+          plaintext: text,
+          timestamp: now,
+        },
+      ]);
+
+      const recipientPks = activeGroup.memberPublicKeys.filter(
+        (pk) => pk !== identity.publicKey
+      );
+
+      for (const recipientPk of recipientPks) {
+        const contact = contacts.find(
+          (c) => c.publicKey === recipientPk && c.sharedKey
+        );
+        if (!contact || !contact.sharedKey) {
+          console.warn(
+            "[client] no sharedKey for group member",
+            recipientPk.slice(0, 16),
+            "– skipping"
+          );
+          continue;
+        }
+
+        try {
+          const encrypted = await encryptMessage(contact.sharedKey, text);
+
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "message",
+                from: identity.publicKey,
+                to: recipientPk,
+                ciphertext: encrypted.ciphertext,
+                nonce: encrypted.nonce,
+                timestamp: now,
+                groupId: activeGroup.id,
+              })
+            );
+          } else {
+            console.warn(
+              "[client] ws not connected, group message not relayed"
+            );
+          }
+        } catch (err) {
+          console.error(
+            "[client] failed to encrypt/send group msg to",
+            recipientPk.slice(0, 16),
+            err
+          );
+        }
+      }
+
+      updateIdentityLastActive(identity.id);
+      return;
+    }
+
+    // DIRECT MESSAGE MODE
+    if (!activeContact || !activeContact.sharedKey) return;
     setInput("");
 
-    const now = new Date().toISOString();
     const encrypted = await encryptMessage(activeContact.sharedKey, text);
 
     addMessageForContact(
@@ -985,6 +1246,7 @@ function ChatShell({
 
   return (
     <div className="flex h-screen bg-black text-white font-mono">
+      {/* Sidebar */}
       <div
         className={`fixed md:relative z-40 md:z-auto h-full border-r border-neutral-700 bg-neutral-900 transition-all duration-300 overflow-hidden flex flex-col ${
           sidebarOpen ? "w-80" : "w-0 md:w-80"
@@ -1008,53 +1270,128 @@ function ChatShell({
             </div>
           </div>
 
+          <div className="flex-shrink-0 flex border-b border-neutral-700 bg-neutral-800/30">
+            <button
+              onClick={() => setViewMode("contacts")}
+              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
+                viewMode === "contacts"
+                  ? "border-orange-500 text-orange-400"
+                  : "border-transparent text-neutral-400 hover:text-neutral-300"
+              }`}
+            >
+              DIRECT
+            </button>
+            <button
+              onClick={() => setViewMode("groups")}
+              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
+                viewMode === "groups"
+                  ? "border-orange-500 text-orange-400"
+                  : "border-transparent text-neutral-400 hover:text-neutral-300"
+              }`}
+            >
+              GROUPS
+            </button>
+          </div>
+
           <div className="flex-1 overflow-y-auto min-w-0">
-            <CollapsibleSection title="Contacts" defaultOpen={true}>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-neutral-500 font-bold uppercase tracking-wider">
-                    Total
-                  </span>
-                  <span className="text-xs text-orange-400 font-bold bg-orange-500/20 px-2 py-1 rounded">
-                    {contacts.length}
-                  </span>
+            {viewMode === "contacts" && (
+              <CollapsibleSection title="Contacts" defaultOpen>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-500 font-bold uppercase tracking-wider">
+                      Total
+                    </span>
+                    <span className="text-xs text-orange-400 font-bold bg-orange-500/20 px-2 py-1 rounded">
+                      {contacts.length}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {contacts.length === 0 && (
+                      <p className="text-xs text-neutral-500">No contacts yet.</p>
+                    )}
+                    {contacts.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setActiveContactId(c.id);
+                          setActiveGroupId(null);
+                          setSidebarOpen(false);
+                        }}
+                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${
+                          activeContactId === c.id && viewMode === "contacts"
+                            ? "border-orange-400 bg-orange-500/20"
+                            : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
+                        }`}
+                      >
+                        <div className="font-bold text-white truncate">
+                          {c.codename}
+                        </div>
+                        <div className="truncate text-neutral-500 text-xs mt-1">
+                          {c.publicKey.slice(0, 16)}…
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setShowAddContact(true)}
+                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-3 py-2 text-xs font-bold text-neutral-300 hover:border-orange-500 hover:text-orange-400 transition-colors uppercase tracking-wider"
+                  >
+                    + ADD CONTACT
+                  </button>
                 </div>
-                <div className="space-y-2">
-                  {contacts.length === 0 && (
-                    <p className="text-xs text-neutral-500">
-                      No contacts yet.
-                    </p>
-                  )}
-                  {contacts.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => {
-                        setActiveContactId(c.id);
-                        setSidebarOpen(false);
-                      }}
-                      className={`w-full text-left p-3 rounded border transition-all text-sm relative ${
-                        activeContactId === c.id
-                          ? "border-orange-400 bg-orange-500/20"
-                          : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
-                      }`}
-                    >
-                      <div className="font-bold text-white truncate">
-                        {c.codename}
-                      </div>
-                      <div className="truncate text-neutral-500 text-xs mt-1">
-                        {c.publicKey.slice(0, 16)}…
-                      </div>
-                    </button>
-                  ))}
+              </CollapsibleSection>
+            )}
+
+            {viewMode === "groups" && (
+              <CollapsibleSection title="Group Chats" defaultOpen>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-500 font-bold uppercase tracking-wider">
+                      Total
+                    </span>
+                    <span className="text-xs text-orange-400 font-bold bg-orange-500/20 px-2 py-1 rounded">
+                      {groupChats.length}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {groupChats.length === 0 && (
+                      <p className="text-xs text-neutral-500">No groups yet.</p>
+                    )}
+                    {groupChats.map((group) => (
+                      <button
+                        key={group.id}
+                        onClick={() => {
+                          setActiveGroupId(group.id);
+                          setActiveContactId(null);
+                          setSidebarOpen(false);
+                        }}
+                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${
+                          activeGroupId === group.id
+                            ? "border-orange-400 bg-orange-500/20"
+                            : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-2 rounded-full bg-orange-500/60" />
+                          <div className="font-bold text-white truncate">
+                            {group.name}
+                          </div>
+                        </div>
+                        <div className="truncate text-neutral-500 text-xs mt-1">
+                          {group.memberPublicKeys.length} members
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setShowCreateGroup(true)}
+                    className="w-full rounded border border-neutral-700 bg-neutral-800 px-3 py-2 text-xs font-bold text-neutral-300 hover:border-orange-500 hover:text-orange-400 transition-colors uppercase tracking-wider"
+                  >
+                    + CREATE GROUP
+                  </button>
                 </div>
-                <button
-                  onClick={() => setShowAddContact(true)}
-                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-3 py-2 text-xs font-bold text-neutral-300 hover:border-orange-500 hover:text-orange-400 transition-colors uppercase tracking-wider"
-                >
-                  + ADD CONTACT
-                </button>
-              </div>
-            </CollapsibleSection>
+              </CollapsibleSection>
+            )}
 
             <CollapsibleSection title="Security" defaultOpen={false}>
               <div className="space-y-4">
@@ -1121,6 +1458,7 @@ function ChatShell({
         />
       )}
 
+      {/* Identity details modal */}
       {showIdentityDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-lg rounded border border-neutral-700 bg-neutral-900 p-6 font-mono shadow-xl max-h-96 overflow-y-auto">
@@ -1187,7 +1525,11 @@ function ChatShell({
                       <QRCode
                         value={contactBundle}
                         size={140}
-                        style={{ height: "auto", maxWidth: "100%", width: "100%" }}
+                        style={{
+                          height: "auto",
+                          maxWidth: "100%",
+                          width: "100%",
+                        }}
                       />
                     </div>
                     <p className="text-xs text-neutral-500 text-center">
@@ -1208,6 +1550,7 @@ function ChatShell({
         </div>
       )}
 
+      {/* Main chat area */}
       <div className="flex-1 flex flex-col bg-black min-w-0 relative">
         <div className="flex-shrink-0 h-16 flex items-center justify-between border-b border-neutral-700 bg-neutral-900 px-4 md:px-6 relative z-20">
           <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -1223,40 +1566,49 @@ function ChatShell({
                   {activeContact.codename}
                 </h2>
                 <p className="text-xs text-neutral-400">
-                  E2EE · <span className="text-orange-400 font-mono font-semibold">{activeContactFp}</span>
+                  E2EE ·{" "}
+                  <span className="text-orange-400 font-mono font-semibold">
+                    {activeContactFp}
+                  </span>
+                </p>
+              </div>
+            ) : activeGroup ? (
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-white truncate flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-orange-500" />
+                  {activeGroup.name}
+                </h2>
+                <p className="text-xs text-neutral-400">
+                  E2EE ·{" "}
+                  <span className="text-orange-400 font-mono">
+                    {activeGroup.memberPublicKeys.length} members
+                  </span>
                 </p>
               </div>
             ) : (
               <div className="text-sm text-neutral-500">
-                Select a contact to start
+                Select a contact or group to start
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <div className="flex items-center gap-1">
-              <Lock className="h-4 w-4 text-orange-500" />
-              <span className="text-xs font-bold text-orange-500 hidden sm:inline">
-                ACTIVE
-              </span>
-            </div>
-
-            {/* Auto-lock countdown */}
-            <span className="text-[10px] font-mono text-neutral-500">
-              Auto-lock: <span className="text-orange-500">{formatTime(timeLeft)}</span>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Lock className="h-4 w-4 text-orange-500" />
+            <span className="text-xs font-bold text-orange-500 hidden sm:inline uppercase">
+              ACTIVE
             </span>
           </div>
         </div>
 
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            {!activeContact && (
+            {!activeContact && !activeGroup && (
               <div className="flex h-full items-center justify-center">
                 <div className="text-center">
                   <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded border border-neutral-700 bg-neutral-800">
                     <Lock className="h-8 w-8 text-neutral-600" />
                   </div>
                   <p className="text-base text-neutral-300 font-semibold">
-                    Select a contact
+                    Select a contact or group
                   </p>
                   <p className="mt-2 text-sm text-neutral-500">
                     to start secure communication
@@ -1265,35 +1617,34 @@ function ChatShell({
               </div>
             )}
 
-            {activeContact && loadingMessages && (
+            {(activeContact || activeGroup) && loadingMessages && (
               <p className="text-sm text-neutral-500 font-semibold">
                 DECRYPTING MESSAGES…
               </p>
             )}
 
-            {activeContact &&
+            {(activeContact || activeGroup) &&
               !loadingMessages &&
               groupedMessages.map((group, idx) => (
                 <MessageGroup
                   key={idx}
                   messages={group.messages}
                   direction={group.direction}
-                  contact={activeContact}
                 />
               ))}
 
-            {activeContact &&
+            {(activeContact || activeGroup) &&
               !loadingMessages &&
               messages.length === 0 && (
                 <p className="text-sm text-neutral-500 font-semibold">
                   No messages. Start a conversation.
                 </p>
               )}
-            
+
             <div ref={messagesEndRef} />
           </div>
 
-          {activeContact && (
+          {(activeContact || activeGroup) && (
             <div className="flex-shrink-0 border-t border-neutral-700 bg-neutral-900 p-5">
               <div className="flex items-end gap-3">
                 <input
@@ -1310,7 +1661,10 @@ function ChatShell({
                 />
                 <button
                   onClick={handleSend}
-                  disabled={!input.trim() || !activeContact.sharedKey}
+                  disabled={
+                    !input.trim() ||
+                    (!activeContact?.sharedKey && !activeGroup)
+                  }
                   className="flex h-11 w-11 items-center justify-center rounded bg-orange-500 text-black hover:bg-orange-400 transition-all hover:shadow-lg hover:shadow-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none flex-shrink-0 font-bold"
                 >
                   <Send className="h-5 w-5" />
@@ -1332,9 +1686,51 @@ function ChatShell({
           onAdded={() => setContacts(loadContacts(identity.id))}
         />
       )}
+
+      {showCreateGroup && (
+        <CreateGroupModal
+          identity={identity}
+          contacts={contacts}
+          onClose={() => setShowCreateGroup(false)}
+          onCreated={(group) => {
+            // refresh local list from store
+            setGroupChats(loadGroups(identity.id));
+
+            // broadcast group creation to other members
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const evt: GroupEvent = {
+                type: "create",
+                groupId: group.id,
+                name: group.name,
+                members: group.memberPublicKeys,
+              };
+
+              // don't send to myself
+              const recipients = group.memberPublicKeys.filter(
+                (pk) => pk !== identity.publicKey
+              );
+
+              if (recipients.length > 0) {
+                ws.send(
+                  JSON.stringify({
+                    type: "group-event",
+                    from: identity.publicKey,
+                    to: recipients,
+                    event: evt,
+                  })
+                );
+              }
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
+
+// ───────────────────────────────────────────────
+// Root Page
+// ───────────────────────────────────────────────
 
 type Mode = "vault" | "create" | "chat" | "unlock";
 
@@ -1403,8 +1799,10 @@ export default function Page() {
     return (
       <div className="flex h-screen items-center justify-center bg-black text-neutral-400 font-mono">
         <div className="text-center">
-          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent mx-auto"></div>
-          <span className="text-sm tracking-widest uppercase font-semibold">BOOTING SECURE NODE…</span>
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent mx-auto" />
+          <span className="text-sm tracking-widest uppercase font-semibold">
+            BOOTING SECURE NODE…
+          </span>
         </div>
       </div>
     );
