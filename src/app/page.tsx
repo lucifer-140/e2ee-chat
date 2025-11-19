@@ -1842,14 +1842,138 @@ export default function Page() {
     }
   };
 
+  // if (!loaded) {
+  //   return (
+  //     <div className="flex h-screen items-center justify-center bg-black text-orange-400 font-mono overflow-hidden relative">
+  //       {/* Matrix Rain Background */}
+  //       <div className="absolute inset-0 opacity-10 pointer-events-none">
+  //         {[...Array(20)].map((_, i) => (
+  //           <div
+  //             key={i}
+  //             className="absolute text-green-500 text-opacity-20 animate-matrix-rain"
+  //             style={{
+  //               left: `${Math.random() * 100}%`,
+  //               top: `-20px`,
+  //               animationDelay: `${Math.random() * 2}s`,
+  //             }}
+  //           >
+  //             {String.fromCharCode(33 + Math.random() * 94)}
+  //           </div>
+  //         ))}
+  //       </div>
+
+  //       {/* CRT Scan Line Overlay */}
+  //       <div className="absolute inset-0 pointer-events-none bg-repeat opacity-10" style={{
+  //         backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 1px, transparent 1px, transparent 2px)',
+  //         animation: 'crt-flicker 0.15s infinite'
+  //       }} />
+
+  //       {/* Loading Container */}
+  //       <div className="text-center z-10 relative">
+  //         {/* Title with Glitch Effect */}
+  //         <div className="mb-8 relative">
+  //           <h1 className="text-2xl font-bold tracking-widest mb-2 glitch-text" data-text="CIPHER NODE">
+  //             CIPHER NODE
+  //           </h1>
+  //           <div className="h-0.5 bg-gradient-to-r from-transparent via-orange-500 to-transparent mx-auto w-48" />
+  //         </div>
+
+  //         {/* Boot Sequence Messages */}
+  //         <div className="mb-6 text-left border border-orange-500 p-4 bg-black bg-opacity-50 w-72 max-h-40 overflow-y-auto">
+  //           <div className="space-y-1 text-sm">
+  //             <div className="text-green-400">[SYSTEM] Initializing secure kernel...</div>
+  //             <div className="text-green-400">[KERNEL] Loading cryptographic modules...</div>
+  //             <div className="text-green-400">[CRYPTO] Generating session keys...</div>
+  //             <div className="text-orange-400 animate-pulse">[STATUS] Booting secure node...</div>
+  //           </div>
+  //         </div>
+
+  //         {/* Animated Spinner */}
+  //         <div className="mb-4 flex justify-center">
+  //           <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+  //         </div>
+
+  //         {/* Status Text */}
+  //         <span className="text-sm tracking-widest uppercase font-semibold block mb-4">
+  //           BOOTING SECURE NODE…
+  //         </span>
+
+  //         {/* Boot Status Indicators */}
+  //         <div className="flex justify-center gap-4 text-xs">
+  //           <div className="flex items-center gap-1">
+  //             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+  //             <span>SECURITY</span>
+  //           </div>
+  //           <div className="flex items-center gap-1">
+  //             <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
+  //             <span>STATUS</span>
+  //           </div>
+  //           <div className="flex items-center gap-1">
+  //             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" style={{ animationDelay: '0.6s' }} />
+  //             <span>MODE</span>
+  //           </div>
+  //         </div>
+  //       </div>
+  //     </div>
+  //   );
+  // }
+
   if (!loaded) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-neutral-400 font-mono">
-        <div className="text-center">
-          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent mx-auto" />
-          <span className="text-sm tracking-widest uppercase font-semibold">
-            BOOTING SECURE NODE…
-          </span>
+      <div className="flex h-screen items-center justify-center bg-black text-orange-400 font-mono overflow-hidden relative">
+        
+        <div className="absolute inset-0 pointer-events-none bg-repeat opacity-10" style={{
+          backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 1px, transparent 1px, transparent 2px)',
+          animation: 'crt-flicker 0.15s infinite'
+        }} />
+
+        {/* --- Main Content --- */}
+        <div className="z-10 relative w-full max-w-lg px-4"> {/* Container widened */}
+          
+          {/* Title */}
+          <div className="mb-10 text-center relative">
+            <h1 className="text-4xl md:text-5xl font-bold tracking-widest mb-2 glitch-text" data-text="CIPHER NODE">
+              CIPHER NODE
+            </h1>
+            <div className="h-0.5 bg-gradient-to-r from-transparent via-orange-500 to-transparent mx-auto w-2/3" />
+          </div>
+
+          {/* --- NEW: TERMINAL WINDOW --- */}
+          <div className="w-full border border-orange-500/50 bg-black/90 shadow-[0_0_20px_rgba(234,88,12,0.2)] rounded-md overflow-hidden backdrop-blur-sm">
+            
+            {/* Terminal Header Bar */}
+            <div className="flex items-center justify-between px-3 py-1.5 bg-orange-900/20 border-b border-orange-500/30">
+              <div className="flex gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+              </div>
+              <div className="text-xs text-orange-300/70 tracking-wider font-semibold">root@cipher-node:~</div>
+              <div className="w-8" /> {/* Spacer for centering */}
+            </div>
+
+            {/* Terminal Body */}
+            <div className="p-4 h-64 overflow-y-auto font-mono text-sm md:text-base space-y-1">
+              <div className="text-orange-300 opacity-70">$ ./init_sequence.sh</div>
+              <div className="text-green-400">[OK] Verifying environment integrity...</div>
+              <div className="text-green-400">[OK] Loading cryptographic modules (AES-256)...</div>
+              <div className="text-green-400">[OK] Establishing P2P handshake...</div>
+              <div className="text-orange-400">[WARN] Latency detected in sector 7G... bypassing.</div>
+              <div className="text-green-400">[OK] Session keys generated.</div>
+              <div className="flex items-center gap-2 text-orange-500 mt-2">
+                <span>$ booting_interface</span>
+                {/* Blinking Cursor */}
+                <span className="inline-block w-2.5 h-4 bg-orange-500 animate-cursor-blink" />
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Status Indicators (Simplified) */}
+          <div className="mt-6 flex justify-between items-center text-xs text-orange-400/60 uppercase tracking-widest px-2">
+            <span>Encrypted Connection</span>
+            <span className="animate-pulse">Standby...</span>
+          </div>
+
         </div>
       </div>
     );

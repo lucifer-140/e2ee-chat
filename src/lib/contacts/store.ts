@@ -41,6 +41,12 @@ export function saveContacts(identityId: string, contacts: Contact[]) {
   saveAllContacts(root);
 }
 
+/**
+ * Idempotent add:
+ * - For this identityId, if a contact with the same publicKey exists,
+ *   it is updated (codename/sharedKey).
+ * - If none exists, a new contact is created.
+ */
 export async function addContact(
   identityId: string,
   mySecretKeyB64: string,
@@ -49,6 +55,33 @@ export async function addContact(
 ): Promise<Contact> {
   const shared = await deriveSessionKey(mySecretKeyB64, theirPublicKey);
 
+  const root = loadAllContacts();
+  const existingList = root[identityId] ?? [];
+
+  // Check if we already know this publicKey for this identity
+  const idx = existingList.findIndex((c) => c.publicKey === theirPublicKey);
+
+  if (idx !== -1) {
+    // Update existing contact instead of creating a duplicate
+    const existing = existingList[idx];
+
+    const updated: Contact = {
+      ...existing,
+      codename: codename || existing.codename, // prefer new codename if provided
+      publicKey: theirPublicKey,
+      sharedKey: shared.key,
+    };
+
+    const newList = [...existingList];
+    newList[idx] = updated;
+
+    root[identityId] = newList;
+    saveAllContacts(root);
+
+    return updated;
+  }
+
+  // No existing contact with this publicKey → create a new one
   const newContact: Contact = {
     id: crypto.randomUUID(),
     codename,
@@ -56,9 +89,8 @@ export async function addContact(
     sharedKey: shared.key,
   };
 
-  const existing = loadContacts(identityId);
-  const updated = [...existing, newContact];
-  saveContacts(identityId, updated);
+  root[identityId] = [...existingList, newContact];
+  saveAllContacts(root);
 
   return newContact;
 }
@@ -70,4 +102,40 @@ export function deleteContactsForIdentity(identityId: string): Contact[] {
   delete root[identityId];
   saveAllContacts(root);
   return contacts;
+}
+
+
+/**
+ * One-time cleanup: remove duplicates per (identityId, publicKey).
+ * If multiple contacts share the same publicKey, they are merged,
+ * and only one contact is kept.
+ */
+export function dedupeAllContacts() {
+  const root = loadAllContacts();
+  const newRoot: ContactsByIdentity = {};
+
+  for (const [identityId, contacts] of Object.entries(root)) {
+    const byPublicKey = new Map<string, Contact>();
+
+    for (const c of contacts) {
+      const existing = byPublicKey.get(c.publicKey);
+      if (!existing) {
+        byPublicKey.set(c.publicKey, c);
+        continue;
+      }
+
+      // Merge rule: last one wins, but keep a stable id
+      const merged: Contact = {
+        ...existing,
+        ...c,
+        id: existing.id,
+      };
+
+      byPublicKey.set(c.publicKey, merged);
+    }
+
+    newRoot[identityId] = Array.from(byPublicKey.values());
+  }
+
+  saveAllContacts(newRoot);
 }
