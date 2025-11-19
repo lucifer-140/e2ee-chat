@@ -101,6 +101,8 @@ interface DecryptedMessage {
   direction: "out" | "in";
   plaintext: string;
   timestamp: string;
+  sender?: string; // publicKey
+  senderCodename?: string;
 }
 
 function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -119,9 +121,11 @@ function ToastProvider({ children }: { children: React.ReactNode }) {
 function MessageGroup({
   messages,
   direction,
+  senderCodename,
 }: {
   messages: DecryptedMessage[];
   direction: "in" | "out";
+  senderCodename?: string;
 }) {
   const firstTime = new Date(messages[0].timestamp);
   const timeStr = firstTime.toLocaleTimeString([], {
@@ -140,6 +144,11 @@ function MessageGroup({
           : "border-neutral-600 bg-neutral-800 text-neutral-50 hover:border-neutral-500 hover:bg-neutral-700"
           }`}
       >
+        {direction === "in" && senderCodename && (
+          <p className="text-xs font-bold text-orange-400 mb-1 uppercase tracking-wider">
+            {senderCodename}
+          </p>
+        )}
         {messages.map((m) => (
           <p
             key={m.id}
@@ -852,6 +861,7 @@ function ChatShell({
     if (
       lastGroup &&
       lastGroup.direction === msg.direction &&
+      lastGroup.sender === msg.sender && // Check sender match
       new Date(msg.timestamp).getTime() -
       new Date(
         lastGroup.messages[lastGroup.messages.length - 1].timestamp
@@ -862,11 +872,13 @@ function ChatShell({
     } else {
       acc.push({
         direction: msg.direction,
+        sender: msg.sender,
+        senderCodename: msg.senderCodename,
         messages: [msg],
       });
     }
     return acc;
-  }, [] as Array<{ direction: "in" | "out"; messages: DecryptedMessage[] }>);
+  }, [] as Array<{ direction: "in" | "out"; messages: DecryptedMessage[]; sender?: string; senderCodename?: string }>);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1126,6 +1138,12 @@ function ChatShell({
           }
 
           if (activeGroupId === groupId) {
+            // Lookup sender codename
+            const senderContact = contacts.find((c) => c.publicKey === from);
+            const senderCodename = senderContact
+              ? senderContact.codename
+              : `Member-${from.slice(0, 4)}`;
+
             setMessages((prev) => [
               ...prev,
               {
@@ -1133,6 +1151,8 @@ function ChatShell({
                 direction: "in",
                 plaintext,
                 timestamp,
+                sender: from,
+                senderCodename,
               },
             ]);
           }
@@ -1733,6 +1753,7 @@ function ChatShell({
                   key={idx}
                   messages={group.messages}
                   direction={group.direction}
+                  senderCodename={group.senderCodename}
                 />
               ))}
 
