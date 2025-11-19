@@ -21,6 +21,7 @@ import {
   addContact,
   loadContacts,
   deleteContactsForIdentity,
+  dedupeAllContacts,
 } from "@/lib/contacts/store";
 
 import {
@@ -1791,6 +1792,11 @@ export default function Page() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    // Run once in browser to clean any old duplicate contacts
+    if (typeof window !== "undefined") {
+      dedupeAllContacts();
+    }
+
     const ids = loadIdentities();
     setIdentities(ids);
 
@@ -1802,6 +1808,7 @@ export default function Page() {
 
     setLoaded(true);
   }, []);
+
 
   const handleIdentityCreated = (id: UnlockedIdentity) => {
     const ids = loadIdentities();
@@ -1842,81 +1849,6 @@ export default function Page() {
     }
   };
 
-  // if (!loaded) {
-  //   return (
-  //     <div className="flex h-screen items-center justify-center bg-black text-orange-400 font-mono overflow-hidden relative">
-  //       {/* Matrix Rain Background */}
-  //       <div className="absolute inset-0 opacity-10 pointer-events-none">
-  //         {[...Array(20)].map((_, i) => (
-  //           <div
-  //             key={i}
-  //             className="absolute text-green-500 text-opacity-20 animate-matrix-rain"
-  //             style={{
-  //               left: `${Math.random() * 100}%`,
-  //               top: `-20px`,
-  //               animationDelay: `${Math.random() * 2}s`,
-  //             }}
-  //           >
-  //             {String.fromCharCode(33 + Math.random() * 94)}
-  //           </div>
-  //         ))}
-  //       </div>
-
-  //       {/* CRT Scan Line Overlay */}
-  //       <div className="absolute inset-0 pointer-events-none bg-repeat opacity-10" style={{
-  //         backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 1px, transparent 1px, transparent 2px)',
-  //         animation: 'crt-flicker 0.15s infinite'
-  //       }} />
-
-  //       {/* Loading Container */}
-  //       <div className="text-center z-10 relative">
-  //         {/* Title with Glitch Effect */}
-  //         <div className="mb-8 relative">
-  //           <h1 className="text-2xl font-bold tracking-widest mb-2 glitch-text" data-text="CIPHER NODE">
-  //             CIPHER NODE
-  //           </h1>
-  //           <div className="h-0.5 bg-gradient-to-r from-transparent via-orange-500 to-transparent mx-auto w-48" />
-  //         </div>
-
-  //         {/* Boot Sequence Messages */}
-  //         <div className="mb-6 text-left border border-orange-500 p-4 bg-black bg-opacity-50 w-72 max-h-40 overflow-y-auto">
-  //           <div className="space-y-1 text-sm">
-  //             <div className="text-green-400">[SYSTEM] Initializing secure kernel...</div>
-  //             <div className="text-green-400">[KERNEL] Loading cryptographic modules...</div>
-  //             <div className="text-green-400">[CRYPTO] Generating session keys...</div>
-  //             <div className="text-orange-400 animate-pulse">[STATUS] Booting secure node...</div>
-  //           </div>
-  //         </div>
-
-  //         {/* Animated Spinner */}
-  //         <div className="mb-4 flex justify-center">
-  //           <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
-  //         </div>
-
-  //         {/* Status Text */}
-  //         <span className="text-sm tracking-widest uppercase font-semibold block mb-4">
-  //           BOOTING SECURE NODE…
-  //         </span>
-
-  //         {/* Boot Status Indicators */}
-  //         <div className="flex justify-center gap-4 text-xs">
-  //           <div className="flex items-center gap-1">
-  //             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-  //             <span>SECURITY</span>
-  //           </div>
-  //           <div className="flex items-center gap-1">
-  //             <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
-  //             <span>STATUS</span>
-  //           </div>
-  //           <div className="flex items-center gap-1">
-  //             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" style={{ animationDelay: '0.6s' }} />
-  //             <span>MODE</span>
-  //           </div>
-  //         </div>
-  //       </div>
-  //     </div>
-  //   );
-  // }
 
   if (!loaded) {
     return (
