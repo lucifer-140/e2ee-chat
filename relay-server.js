@@ -77,7 +77,16 @@ wss.on("connection", (ws) => {
     //    { type: "message", from, to, ciphertext, nonce, timestamp, groupId? }
     // ─────────────────────────
     if (msg.type === "message") {
-      const { from, to, ciphertext, nonce, timestamp, groupId } = msg;
+      const {
+        from,
+        to,
+        ciphertext,
+        nonce,
+        timestamp,
+        groupId,
+        counter,
+        signature,
+      } = msg;
       if (typeof to !== "string" || typeof from !== "string") return;
 
       const recSet = connections.get(to);
@@ -92,9 +101,11 @@ wss.on("connection", (ws) => {
         type: "message",
         from,
         ciphertext,
-        nonce,
+        nonce: nonce ?? null,
         timestamp,
         ...(groupId ? { groupId } : {}),
+        ...(typeof counter === "number" ? { counter } : {}),
+        ...(signature ? { signature } : {}),
       });
 
       for (const client of recSet) {
@@ -107,10 +118,13 @@ wss.on("connection", (ws) => {
         `[relay] Forwarded message ${from.slice(0, 16)}… -> ${to.slice(
           0,
           16
-        )}…` + (groupId ? ` (groupId=${groupId})` : "")
+        )}…` +
+        (groupId ? ` (groupId=${groupId}, counter=${counter ?? "?"})` : "")
       );
       return;
     }
+
+
 
     // ─────────────────────────
     // 3) Group events
@@ -210,6 +224,56 @@ wss.on("connection", (ws) => {
     }
 
     // ─────────────────────────
+    // 4b) Sender-key bundle for new Signal-style group crypto
+    //     { type: "group-sender-key-bundle", from, to: string|string[], bundle }
+    // ─────────────────────────
+    if (msg.type === "group-sender-key-bundle") {
+      const { from, to, bundle, ciphertext, nonce } = msg;
+      if (typeof from !== "string") return;
+
+      const recipients = Array.isArray(to) ? to : [to];
+
+      const payload = JSON.stringify({
+        type: "group-sender-key-bundle",
+        from,
+        bundle,
+        ciphertext,
+        nonce,
+      });
+
+      let deliveredCount = 0;
+
+      for (const pk of recipients) {
+        if (typeof pk !== "string") continue;
+        const recSet = connections.get(pk);
+        if (!recSet || recSet.size === 0) {
+          console.log(
+            `[relay] group-sender-key-bundle for ${pk.slice(
+              0,
+              16
+            )}… – no active connections`
+          );
+          continue;
+        }
+        for (const client of recSet) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+            deliveredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `[relay] Forwarded group-sender-key-bundle from ${from.slice(
+          0,
+          16
+        )}… to ${recipients.length} recipient(s), delivered=${deliveredCount}`
+      );
+      return;
+    }
+
+
+    // ─────────────────────────
     // 5) Group-message (Signal-style sender-key messages)
     //    { type: "group-message", from, to: string|string[], packet }
     //    packet = { kind:"group-message", groupId, senderIdentityKey, ... }
@@ -256,6 +320,13 @@ wss.on("connection", (ws) => {
       );
       return;
     }
+
+    // ─────────────────────────
+    // 6) Group sender-key bundle (for Signal-style group crypto)
+    //    { type: "group-sender-key-bundle", from, to: string|string[], bundle }
+    // ─────────────────────────
+
+
 
     // Any unknown message type gets ignored
     console.log("[relay] Unknown msg type:", msg.type);

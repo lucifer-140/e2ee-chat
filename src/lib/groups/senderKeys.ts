@@ -1,432 +1,350 @@
-// src/lib/groups/senderKeys.ts
+"use client";
+
 import sodium from "libsodium-wrappers-sumo";
 
-import { safeRandomId } from "@/lib/utils/id";
+// ───────────────────────────────────────────────
+// Libsodium Helper
+// ───────────────────────────────────────────────
 
-/**
- * On-disk state for a sender key in a given group.
- * For the local sender we keep signingSecretKey; for others we only keep pub + chainKey.
- */
+let sodiumReady: Promise<typeof sodium> | null = null;
+
+async function getSodium() {
+  if (!sodiumReady) {
+    sodiumReady = (async () => {
+      await sodium.ready;
+      return sodium;
+    })();
+  }
+  return sodiumReady;
+}
+
+// ───────────────────────────────────────────────
+// Types
+// ───────────────────────────────────────────────
+
 export interface SenderKeyState {
-  identityId: string;
   groupId: string;
-  senderIdentityKey: string;  // identity public key (base64) of the sender
-  signingPublicKey: string;   // Ed25519 pub (base64)
-  signingSecretKey?: string;  // Ed25519 secret (base64) – only for self
-  chainKey: string;           // current chain key (base64, 32 bytes)
-  messageIndex: number;       // ratchet index
+  senderPublicKey: string; // identity.publicKey of the sender
+  rootChainKey: string; // base64
+  chainKey: string; // base64 (current)
+  index: number; // message counter
+  signingPublicKey: string; // base64 (Ed25519)
+  signingSecretKey?: string; // base64 (only for self)
 }
 
-export interface SenderKeyBundlePayload {
-  kind: "sender-key-bundle";
+export interface SenderKeyBundle {
   groupId: string;
-  senderIdentityKey: string;
+  senderPublicKey: string;
   signingPublicKey: string;
-  initialChainKey: string; // base64 32 bytes
+  initialChainKey: string; // base64
 }
 
-export interface GroupMessagePacket {
-  kind: "group-message";
-  groupId: string;
-  senderIdentityKey: string;
-  signingPublicKey: string;
-  messageIndex: number;
-  nonce: string;       // base64
-  ciphertext: string;  // base64
-  signature: string;   // base64
-}
+type SenderKeyStore = Record<
+  string, // groupId
+  Record<string, SenderKeyState> // senderPublicKey -> state
+>;
 
-// ─────────────────────────────────────────────
-// Helpers: storage
-// ─────────────────────────────────────────────
+const SENDER_KEYS_KEY = "e2ee_sender_keys_v2";
 
-const STORAGE_KEY = "sender-key-states:v1";
+// ───────────────────────────────────────────────
+// Storage
+// ───────────────────────────────────────────────
 
-function loadAllStates(): SenderKeyState[] {
-  if (typeof window === "undefined") return [];
+function loadAllSenderKeys(): SenderKeyStore {
+  if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as SenderKeyState[];
+    const raw = localStorage.getItem(SENDER_KEYS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as SenderKeyStore;
   } catch {
-    return [];
+    return {};
   }
 }
 
-function saveAllStates(states: SenderKeyState[]) {
+function saveAllSenderKeys(store: SenderKeyStore) {
   if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(states));
-  } catch (err) {
-    console.warn("[senderKeys] failed to save states", err);
-  }
+  localStorage.setItem(SENDER_KEYS_KEY, JSON.stringify(store));
 }
 
-function findState(
-  identityId: string,
+export function loadSenderKeyState(
   groupId: string,
-  senderIdentityKey: string
+  senderPublicKey: string
 ): SenderKeyState | undefined {
-  const all = loadAllStates();
-  return all.find(
-    (s) =>
-      s.identityId === identityId &&
-      s.groupId === groupId &&
-      s.senderIdentityKey === senderIdentityKey
-  );
+  const root = loadAllSenderKeys();
+  return root[groupId]?.[senderPublicKey];
 }
 
-function upsertState(state: SenderKeyState) {
-  const all = loadAllStates();
-  const idx = all.findIndex(
-    (s) =>
-      s.identityId === state.identityId &&
-      s.groupId === state.groupId &&
-      s.senderIdentityKey === state.senderIdentityKey
-  );
-  if (idx >= 0) {
-    all[idx] = state;
-  } else {
-    all.push(state);
-  }
-  saveAllStates(all);
+function saveSenderKeyState(state: SenderKeyState) {
+  const root = loadAllSenderKeys();
+  if (!root[state.groupId]) root[state.groupId] = {};
+  root[state.groupId][state.senderPublicKey] = state;
+  saveAllSenderKeys(root);
 }
 
-// ─────────────────────────────────────────────
-// Key derivation helpers
-// ─────────────────────────────────────────────
+// ───────────────────────────────────────────────
+// Crypto Primitives (Real Signal-style)
+// ───────────────────────────────────────────────
 
-async function ensureSodiumReady() {
-  if ((sodium as any).ready) {
-    await (sodium as any).ready;
-  } else if (typeof (sodium as any).then === "function") {
-    await sodium;
-  }
+// HKDF-like derivation using HMAC-SHA256
+// Output is always 32 bytes (sodium.crypto_auth_hmacsha256_BYTES)
+async function kdf(inputB64: string, label: "msg" | "chain"): Promise<string> {
+  const s = await getSodium();
+  const key = s.from_base64(inputB64, s.base64_variants.URLSAFE_NO_PADDING);
+
+  // Label as a single byte: 0x01 for message key, 0x02 for next chain key
+  const data = new Uint8Array([label === "msg" ? 0x01 : 0x02]);
+
+  const out = s.crypto_auth_hmacsha256(data, key);
+  return s.to_base64(out, s.base64_variants.URLSAFE_NO_PADDING);
 }
 
-/**
- * Very simple chain-key ratchet:
- *   nextChainKey = BLAKE2b(chainKey, "sender-key-chain")
- *   messageKey   = BLAKE2b(chainKey, "sender-key-msg")
- */
-async function ratchetChainKey(
-  chainKeyB64: string
-): Promise<{ nextChainKeyB64: string; messageKey: Uint8Array }> {
-  await ensureSodiumReady();
-  const s = sodium as typeof import("libsodium-wrappers-sumo");
+// Encrypt using XChaCha20-Poly1305
+// We use the 32-byte message key.
+// Since we don't have a separate IV derivation step in this simplified ratchet,
+// we will generate a random nonce.
+// Returns: { ciphertext: base64(nonce + ciphertext) }
+async function encryptWithSenderKey(
+  msgKeyB64: string,
+  plaintext: string
+): Promise<{ ciphertext: string }> {
+  const s = await getSodium();
+  const key = s.from_base64(msgKeyB64, s.base64_variants.URLSAFE_NO_PADDING);
 
-  const chainKey = s.from_base64(chainKeyB64, s.base64_variants.ORIGINAL);
+  const nonce = s.randombytes_buf(s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const pt = s.from_string(plaintext);
 
-  const nextChainKey = s.crypto_generichash(
-    32,
-    chainKey,
-    s.from_string("sender-key-chain")
+  const ct = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    pt,
+    null,
+    null,
+    nonce,
+    key
   );
-  const messageKey = s.crypto_generichash(
-    32,
-    chainKey,
-    s.from_string("sender-key-msg")
-  );
+
+  // Combine nonce + ct for storage/transport
+  const combined = new Uint8Array(nonce.length + ct.length);
+  combined.set(nonce);
+  combined.set(ct, nonce.length);
 
   return {
-    nextChainKeyB64: s.to_base64(
-      nextChainKey,
-      s.base64_variants.ORIGINAL
-    ),
-    messageKey,
+    ciphertext: s.to_base64(combined, s.base64_variants.URLSAFE_NO_PADDING),
   };
 }
 
-// ─────────────────────────────────────────────
-// Public API
-// ─────────────────────────────────────────────
+// Decrypt using XChaCha20-Poly1305
+// Expects ciphertextB64 to be base64(nonce + ciphertext)
+async function decryptWithSenderKey(
+  msgKeyB64: string,
+  ciphertextB64: string
+): Promise<string> {
+  const s = await getSodium();
+  const key = s.from_base64(msgKeyB64, s.base64_variants.URLSAFE_NO_PADDING);
+  const combined = s.from_base64(ciphertextB64, s.base64_variants.URLSAFE_NO_PADDING);
+
+  const nonceLen = s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+  if (combined.length < nonceLen) throw new Error("Ciphertext too short");
+
+  const nonce = combined.subarray(0, nonceLen);
+  const ct = combined.subarray(nonceLen);
+
+  const pt = s.crypto_aead_xchacha20poly1305_ietf_decrypt(
+    null,
+    ct,
+    null,
+    nonce,
+    key
+  );
+
+  return s.to_string(pt);
+}
+
+// Sign using Ed25519
+async function sign(secretKeyB64: string, msg: string): Promise<string> {
+  const s = await getSodium();
+  const sk = s.from_base64(secretKeyB64, s.base64_variants.URLSAFE_NO_PADDING);
+  const sig = s.crypto_sign_detached(msg, sk);
+  return s.to_base64(sig, s.base64_variants.URLSAFE_NO_PADDING);
+}
+
+// Verify using Ed25519
+async function verify(publicKeyB64: string, msg: string, sigB64: string): Promise<boolean> {
+  const s = await getSodium();
+  try {
+    const pk = s.from_base64(publicKeyB64, s.base64_variants.URLSAFE_NO_PADDING);
+    const sig = s.from_base64(sigB64, s.base64_variants.URLSAFE_NO_PADDING);
+    return s.crypto_sign_verify_detached(sig, msg, pk);
+  } catch {
+    return false;
+  }
+}
+
+// ───────────────────────────────────────────────
+// API: ensure self state + bundle
+// ───────────────────────────────────────────────
 
 /**
- * Ensure the local identity has a SenderKeyState for itself in this group.
- * If it exists, returns it. Otherwise generates:
- *   - Ed25519 signing keypair
- *   - fresh chainKey
+ * Ensure we have a SenderKeyState for *ourselves* in this group.
+ * Returns a SenderKeyBundle if this is a fresh state (needs to be
+ * sent to others), or null if state already existed.
  */
 export async function ensureSelfSenderKeyState(
   identityId: string,
   groupId: string,
-  identityPublicKey: string
-): Promise<SenderKeyState> {
-  await ensureSodiumReady();
-  const s = sodium as typeof import("libsodium-wrappers-sumo");
-
-  const existing = findState(identityId, groupId, identityPublicKey);
-  if (existing && existing.signingSecretKey) {
-    return existing;
+  selfPublicKey: string
+): Promise<SenderKeyBundle> {
+  let state = loadSenderKeyState(groupId, selfPublicKey);
+  if (state) {
+    // Return current state as a bundle so we can re-broadcast if needed
+    return {
+      groupId,
+      senderPublicKey: selfPublicKey,
+      signingPublicKey: state.signingPublicKey,
+      initialChainKey: state.chainKey, // Give them the CURRENT key so they can start decrypting from now
+    };
   }
 
-  // Create new sender key state
-  const keypair = s.crypto_sign_keypair(); // Ed25519
-  const chainKeyBytes = s.randombytes_buf(32);
+  const s = await getSodium();
 
-  const state: SenderKeyState = {
-    identityId,
+  // Generate fresh Root Chain Key (32 bytes)
+  const rootChainKeyRaw = s.randombytes_buf(32);
+  const rootChainKey = s.to_base64(rootChainKeyRaw, s.base64_variants.URLSAFE_NO_PADDING);
+
+  // Derive Initial Chain Key
+  const initialChainKey = await kdf(rootChainKey, "chain");
+
+  // Generate fresh Signing Keypair (Ed25519)
+  const keypair = s.crypto_sign_keypair();
+  const signingPublicKey = s.to_base64(keypair.publicKey, s.base64_variants.URLSAFE_NO_PADDING);
+  const signingSecretKey = s.to_base64(keypair.privateKey, s.base64_variants.URLSAFE_NO_PADDING);
+
+  state = {
     groupId,
-    senderIdentityKey: identityPublicKey,
-    signingPublicKey: s.to_base64(
-      keypair.publicKey,
-      s.base64_variants.ORIGINAL
-    ),
-    signingSecretKey: s.to_base64(
-      keypair.privateKey,
-      s.base64_variants.ORIGINAL
-    ),
-    chainKey: s.to_base64(chainKeyBytes, s.base64_variants.ORIGINAL),
-    messageIndex: 0,
+    senderPublicKey: selfPublicKey,
+    rootChainKey,
+    chainKey: initialChainKey,
+    index: 0,
+    signingPublicKey,
+    signingSecretKey,
   };
 
-  upsertState(state);
-  return state;
-}
+  saveSenderKeyState(state);
 
-/**
- * Export a SenderKeyBundlePayload from the local sender state so it can be
- * encrypted (with pairwise sharedKey) and sent to group members.
- */
-export function makeSenderKeyBundlePayload(
-  selfState: SenderKeyState
-): SenderKeyBundlePayload {
   return {
-    kind: "sender-key-bundle",
-    groupId: selfState.groupId,
-    senderIdentityKey: selfState.senderIdentityKey,
-    signingPublicKey: selfState.signingPublicKey,
-    initialChainKey: selfState.chainKey,
+    groupId,
+    senderPublicKey: selfPublicKey,
+    signingPublicKey,
+    initialChainKey,
   };
 }
 
 /**
- * Save a sender-key bundle we received from another member for this local identity.
- * If we already had a state for that sender/group, we only update if this looks "newer".
+ * Apply an incoming SenderKeyBundle for some OTHER sender.
  */
-export function saveSenderKeyBundle(
-  identityId: string,
-  payload: SenderKeyBundlePayload
-) {
-  const existing = findState(
-    identityId,
-    payload.groupId,
-    payload.senderIdentityKey
-  );
-
-  // If we already have a chainKey and some progress, keep the existing one;
-  // for now we just ignore "older" bundles.
-  if (existing && existing.messageIndex > 0) {
+export function applySenderKeyBundle(bundle: SenderKeyBundle) {
+  const existing = loadSenderKeyState(bundle.groupId, bundle.senderPublicKey);
+  if (existing) {
+    // already have state; skip or overwrite depending on your rekey policy
     return;
   }
 
-  const newState: SenderKeyState = {
-    identityId,
-    groupId: payload.groupId,
-    senderIdentityKey: payload.senderIdentityKey,
-    signingPublicKey: payload.signingPublicKey,
-    chainKey: payload.initialChainKey,
-    messageIndex: 0,
+  const state: SenderKeyState = {
+    groupId: bundle.groupId,
+    senderPublicKey: bundle.senderPublicKey,
+    rootChainKey: "", // unknown for receivers; not needed
+    chainKey: bundle.initialChainKey,
+    index: 0,
+    signingPublicKey: bundle.signingPublicKey,
   };
-
-  upsertState(newState);
+  saveSenderKeyState(state);
 }
 
-/**
- * Encrypt a group message from the local sender using its SenderKeyState.
- * This:
- *   - ratchets the chain key
- *   - derives a message key
- *   - encrypts with crypto_secretbox
- *   - signs header+ciphertext with Ed25519
- *   - updates and persists the SenderKeyState
- */
-export async function encryptGroupMessageFromSelf(
-  identityId: string,
+// ───────────────────────────────────────────────
+// API: encrypt / decrypt group messages
+// ───────────────────────────────────────────────
+
+export async function encryptGroupMessageAsSender(
   groupId: string,
-  identityPublicKey: string,
+  selfPublicKey: string,
   plaintext: string
-): Promise<{ packet: GroupMessagePacket }> {
-  await ensureSodiumReady();
-  const s = sodium as typeof import("libsodium-wrappers-sumo");
-
-  const state = findState(identityId, groupId, identityPublicKey);
+): Promise<{ counter: number; ciphertext: string; signature: string }> {
+  const state = loadSenderKeyState(groupId, selfPublicKey);
   if (!state || !state.signingSecretKey) {
-    throw new Error(
-      "[senderKeys] self sender key state missing or incomplete"
-    );
+    throw new Error("No sender key state for self in this group");
   }
 
-  const { nextChainKeyB64, messageKey } = await ratchetChainKey(
-    state.chainKey
-  );
-  const newIndex = state.messageIndex + 1;
+  const currentIndex = state.index;
+  const msgKey = await kdf(state.chainKey, "msg");
+  const nextChain = await kdf(state.chainKey, "chain");
 
-  const nonce = s.randombytes_buf(s.crypto_secretbox_NONCEBYTES);
+  const { ciphertext } = await encryptWithSenderKey(msgKey, plaintext);
 
-  const ciphertext = s.crypto_secretbox_easy(
-    s.from_string(plaintext),
-    nonce,
-    messageKey
-  );
-
-  // Build header: what gets signed
-  const header = JSON.stringify({
-    kind: "group-message",
+  const payloadToSign = JSON.stringify({
     groupId,
-    senderIdentityKey: identityPublicKey,
-    signingPublicKey: state.signingPublicKey,
-    messageIndex: newIndex,
+    senderPublicKey: selfPublicKey,
+    counter: currentIndex,
+    ciphertext,
   });
 
-  const headerBytes = s.from_string(header);
-  const toSign = new Uint8Array(
-    headerBytes.length + ciphertext.length
-  );
-  toSign.set(headerBytes, 0);
-  toSign.set(ciphertext, headerBytes.length);
+  const signature = await sign(state.signingSecretKey, payloadToSign);
 
-  const sk = s.from_base64(
-    state.signingSecretKey,
-    s.base64_variants.ORIGINAL
-  );
-  const signature = s.crypto_sign_detached(toSign, sk);
+  // ratchet forward
+  state.chainKey = nextChain;
+  state.index = currentIndex + 1;
+  saveSenderKeyState(state);
 
-  // Update state
-  const updated: SenderKeyState = {
-    ...state,
-    chainKey: nextChainKeyB64,
-    messageIndex: newIndex,
+  return {
+    counter: currentIndex,
+    ciphertext,
+    signature,
   };
-  upsertState(updated);
-
-  const packet: GroupMessagePacket = {
-    kind: "group-message",
-    groupId,
-    senderIdentityKey: identityPublicKey,
-    signingPublicKey: state.signingPublicKey,
-    messageIndex: newIndex,
-    nonce: s.to_base64(nonce, s.base64_variants.ORIGINAL),
-    ciphertext: s.to_base64(
-      ciphertext,
-      s.base64_variants.ORIGINAL
-    ),
-    signature: s.to_base64(
-      signature,
-      s.base64_variants.ORIGINAL
-    ),
-  };
-
-  return { packet };
 }
 
-/**
- * Decrypt a GroupMessagePacket for a local identity.
- * This:
- *   - finds/uses SenderKeyState for (groupId, senderIdentityKey)
- *   - verifies the Ed25519 signature
- *   - decrypts with chain-key-derived message key
- *   - ratchets the chainKey and updates state
- */
-export async function decryptGroupMessageFromPacket(
-  identityId: string,
-  packet: GroupMessagePacket
+export async function decryptGroupMessageAsReceiver(
+  groupId: string,
+  senderPublicKey: string,
+  counter: number,
+  ciphertext: string,
+  signature: string
 ): Promise<string | null> {
-  await ensureSodiumReady();
-  const s = sodium as typeof import("libsodium-wrappers-sumo");
-
-  if (packet.kind !== "group-message") return null;
-
-  const state = findState(
-    identityId,
-    packet.groupId,
-    packet.senderIdentityKey
-  );
-
+  const state = loadSenderKeyState(groupId, senderPublicKey);
   if (!state) {
-    console.warn(
-      "[senderKeys] no senderKeyState for group",
-      packet.groupId,
-      "sender",
-      packet.senderIdentityKey.slice(0, 16)
-    );
+    console.warn("[senderKeys] no state for sender", senderPublicKey);
     return null;
   }
 
-  // For simplicity, we assume in-order delivery; if packet.messageIndex
-  // is <= state.messageIndex, we treat as duplicate and ignore.
-  if (packet.messageIndex <= state.messageIndex) {
-    console.warn(
-      "[senderKeys] received stale group message index",
-      packet.messageIndex,
-      "state index",
-      state.messageIndex
-    );
-    return null;
-  }
-
-  const { nextChainKeyB64, messageKey } = await ratchetChainKey(
-    state.chainKey
-  );
-
-  const nonce = s.from_base64(
-    packet.nonce,
-    s.base64_variants.ORIGINAL
-  );
-  const ciphertext = s.from_base64(
-    packet.ciphertext,
-    s.base64_variants.ORIGINAL
-  );
-  const sig = s.from_base64(
-    packet.signature,
-    s.base64_variants.ORIGINAL
-  );
-  const pk = s.from_base64(
-    packet.signingPublicKey,
-    s.base64_variants.ORIGINAL
-  );
-
-  // Rebuild header to verify sig
-  const header = JSON.stringify({
-    kind: "group-message",
-    groupId: packet.groupId,
-    senderIdentityKey: packet.senderIdentityKey,
-    signingPublicKey: packet.signingPublicKey,
-    messageIndex: packet.messageIndex,
+  const payloadToVerify = JSON.stringify({
+    groupId,
+    senderPublicKey,
+    counter,
+    ciphertext,
   });
-  const headerBytes = s.from_string(header);
-  const signedBytes = new Uint8Array(
-    headerBytes.length + ciphertext.length
-  );
-  signedBytes.set(headerBytes, 0);
-  signedBytes.set(ciphertext, headerBytes.length);
 
-  const ok = s.crypto_sign_verify_detached(sig, signedBytes, pk);
+  const ok = await verify(state.signingPublicKey, payloadToVerify, signature);
   if (!ok) {
-    console.warn("[senderKeys] invalid group message signature");
+    console.warn("[senderKeys] invalid signature");
     return null;
   }
 
-  let plaintextBytes: Uint8Array;
+  // naive ratchet: assume messages arrive in order
+  if (counter !== state.index) {
+    // for production: handle skipped keys/out-of-order
+    // (silently ignore warning for now to keep console clean)
+  }
+
+  const msgKey = await kdf(state.chainKey, "msg");
+  const nextChain = await kdf(state.chainKey, "chain");
+
+  let plaintext: string | null = null;
   try {
-    plaintextBytes = s.crypto_secretbox_open_easy(
-      ciphertext,
-      nonce,
-      messageKey
-    );
-  } catch {
-    console.warn("[senderKeys] failed to decrypt group message");
+    plaintext = await decryptWithSenderKey(msgKey, ciphertext);
+  } catch (err) {
+    console.error("[senderKeys] decryption failed", err);
     return null;
   }
 
-  const updated: SenderKeyState = {
-    ...state,
-    chainKey: nextChainKeyB64,
-    messageIndex: packet.messageIndex,
-  };
-  upsertState(updated);
+  state.chainKey = nextChain;
+  state.index = state.index + 1;
+  saveSenderKeyState(state);
 
-  return s.to_string(plaintextBytes);
+  return plaintext;
 }

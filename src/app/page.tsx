@@ -31,7 +31,7 @@ import {
   StoredMessage,
 } from "@/lib/messages/store";
 
-import { decryptMessage, encryptMessage } from "@/lib/crypto/session";
+import { decryptMessage, encryptMessage, deriveSessionKey } from "@/lib/crypto/session";
 
 import {
   GroupChat,
@@ -41,7 +41,14 @@ import {
   GroupEvent,
 } from "@/lib/groups/store";
 
-import { ensureSelfSenderKeyState } from "@/lib/groups/senderKeys";
+import {
+  ensureSelfSenderKeyState,
+  applySenderKeyBundle,
+  encryptGroupMessageAsSender,
+  decryptGroupMessageAsReceiver,
+  SenderKeyBundle,
+} from "@/lib/groups/senderKeys";
+
 
 import { getPublicKeyFingerprint } from "@/lib/crypto/fingerprint";
 import { safeRandomId } from "@/lib/utils/id";
@@ -124,16 +131,14 @@ function MessageGroup({
 
   return (
     <div
-      className={`flex ${
-        direction === "out" ? "justify-end" : "justify-start"
-      } group mb-3`}
+      className={`flex ${direction === "out" ? "justify-end" : "justify-start"
+        } group mb-3`}
     >
       <div
-        className={`rounded px-5 py-3 space-y-2 max-w-2xl border transition-all hover:shadow-lg ${
-          direction === "out"
-            ? "border-orange-400/50 bg-orange-950/40 text-orange-50 hover:border-orange-400 hover:bg-orange-950/60"
-            : "border-neutral-600 bg-neutral-800 text-neutral-50 hover:border-neutral-500 hover:bg-neutral-700"
-        }`}
+        className={`rounded px-5 py-3 space-y-2 max-w-2xl border transition-all hover:shadow-lg ${direction === "out"
+          ? "border-orange-400/50 bg-orange-950/40 text-orange-50 hover:border-orange-400 hover:bg-orange-950/60"
+          : "border-neutral-600 bg-neutral-800 text-neutral-50 hover:border-neutral-500 hover:bg-neutral-700"
+          }`}
       >
         {messages.map((m) => (
           <p
@@ -144,9 +149,8 @@ function MessageGroup({
           </p>
         ))}
         <p
-          className={`text-xs mt-3 transition-opacity opacity-70 group-hover:opacity-100 font-mono ${
-            direction === "out" ? "text-orange-400/60" : "text-neutral-500"
-          }`}
+          className={`text-xs mt-3 transition-opacity opacity-70 group-hover:opacity-100 font-mono ${direction === "out" ? "text-orange-400/60" : "text-neutral-500"
+            }`}
         >
           {timeStr}
         </p>
@@ -205,9 +209,8 @@ function CollapsibleSection({
       >
         {title}
         <ChevronDown
-          className={`h-4 w-4 transition-transform ${
-            open ? "rotate-180" : ""
-          }`}
+          className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""
+            }`}
         />
       </button>
       {open && (
@@ -850,10 +853,10 @@ function ChatShell({
       lastGroup &&
       lastGroup.direction === msg.direction &&
       new Date(msg.timestamp).getTime() -
-        new Date(
-          lastGroup.messages[lastGroup.messages.length - 1].timestamp
-        ).getTime() <
-        60_000
+      new Date(
+        lastGroup.messages[lastGroup.messages.length - 1].timestamp
+      ).getTime() <
+      60_000
     ) {
       lastGroup.messages.push(msg);
     } else {
@@ -981,7 +984,7 @@ function ChatShell({
     setGroupChats(loadedGroups);
   }, [identity.id]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (typeof window === "undefined") return;
 
     const host = window.location.hostname;
@@ -1022,36 +1025,72 @@ function ChatShell({
       try {
         const data = JSON.parse(event.data);
 
-        // 1) Direct + group messages
-        if (data.type === "message") {
-          const { from, ciphertext, nonce, timestamp, groupId } = data;
-
-          const contact = contacts.find((c) => c.publicKey === from);
-          if (!contact || !contact.sharedKey) {
-            console.warn(
-              "[client] incoming msg from unknown/unshared contact"
-            );
+        // 0) New: Sender key bundle for groups
+        // 0) New: Sender key bundle for groups
+        if (data.type === "group-sender-key-bundle") {
+          // Secure path: encrypted bundle
+          if (data.ciphertext && data.nonce) {
+            try {
+              const { key: sharedKey } = await deriveSessionKey(
+                identity.secretKey,
+                data.from
+              );
+              const plaintext = await decryptMessage(
+                sharedKey,
+                data.nonce,
+                data.ciphertext
+              );
+              const bundle = JSON.parse(plaintext) as SenderKeyBundle;
+              applySenderKeyBundle(bundle);
+            } catch (err) {
+              console.error(
+                "[client] failed to decrypt sender key bundle from",
+                data.from,
+                err
+              );
+            }
             return;
           }
 
-          const plaintext = await decryptMessage(
-            contact.sharedKey,
-            nonce,
-            ciphertext
-          );
+          // Legacy/Insecure path (fallback)
+          if (data.bundle) {
+            const bundle = data.bundle as SenderKeyBundle;
+            applySenderKeyBundle(bundle);
+            console.log(
+              "[client] applied sender-key bundle for group",
+              bundle.groupId
+            );
+            return;
+          }
+        }
 
-          // Group message path
-          if (groupId) {
-            const group = groupChats.find((g) => g.id === groupId);
-            if (!group) {
-              console.warn(
-                "[client] incoming group msg for unknown group",
-                groupId
-              );
+        // 1) Direct + group messages
+        if (data.type === "message") {
+          const { from, ciphertext, nonce, timestamp, groupId, counter, signature } = data;
+
+          // DIRECT MESSAGE MODE (no groupId): unchanged
+          if (!groupId) {
+            const contact = contacts.find((c) => c.publicKey === from);
+            if (!contact || !contact.sharedKey) {
+              console.warn("[client] incoming direct msg from unknown/unshared contact");
               return;
             }
 
-            if (activeGroupId === groupId) {
+            const plaintext = await decryptMessage(
+              contact.sharedKey,
+              nonce,
+              ciphertext
+            );
+
+            addMessageForContact(
+              contact.id,
+              "in",
+              ciphertext,
+              nonce,
+              timestamp
+            );
+
+            if (contact.id === activeContactId) {
               setMessages((prev) => [
                 ...prev,
                 {
@@ -1062,21 +1101,31 @@ function ChatShell({
                 },
               ]);
             }
-
-            // For now, no disk persistence for group messages.
             return;
           }
 
-          // Normal direct message
-          addMessageForContact(
-            contact.id,
-            "in",
+          // GROUP MESSAGE MODE (groupId present) → use Sender Keys
+          const group = groupChats.find((g) => g.id === groupId);
+          if (!group) {
+            console.warn("[client] incoming group msg for unknown group", groupId);
+            return;
+          }
+
+          // decrypt via sender key state, not via contact.sharedKey
+          const plaintext = await decryptGroupMessageAsReceiver(
+            groupId,
+            from,
+            counter,
             ciphertext,
-            nonce,
-            timestamp
+            signature
           );
 
-          if (contact.id === activeContactId) {
+          if (plaintext == null) {
+            console.warn("[client] failed to decrypt group message via sender key");
+            return;
+          }
+
+          if (activeGroupId === groupId) {
             setMessages((prev) => [
               ...prev,
               {
@@ -1088,8 +1137,10 @@ function ChatShell({
             ]);
           }
 
+          // still no disk persistence for group messages for now
           return;
         }
+
 
         // 2) Group events (create, rename, membership changes, etc.)
         if (data.type === "group-event") {
@@ -1103,49 +1154,9 @@ function ChatShell({
           );
           setGroupChats(updated);
 
-          // 🔸 NEW: auto-create contacts for all other members in the group
-          // so every pair has a sharedKey, even if user didn't add manually.
-          if (evt.type === "create" && Array.isArray((evt as any).members)) {
-            const members: string[] = (evt as any).members;
-
-            // current contacts in store
-            const existing = loadContacts(identity.id);
-
-            const missing = members.filter(
-              (pk) =>
-                pk !== identity.publicKey &&
-                !existing.some((c) => c.publicKey === pk)
-            );
-
-            if (missing.length > 0) {
-              console.log(
-                "[client] auto-adding contacts for group members",
-                missing.map((pk) => pk.slice(0, 16) + "…")
-              );
-
-              // create simple auto codenames like member-xxxx
-              for (const pk of missing) {
-                const autoName = `member-${pk.slice(0, 8)}`;
-                try {
-                  await addContact(
-                    identity.id,
-                    identity.secretKey,
-                    autoName,
-                    pk
-                  );
-                } catch (err) {
-                  console.warn(
-                    "[client] failed auto-add contact for group member",
-                    pk.slice(0, 16),
-                    err
-                  );
-                }
-              }
-
-              // refresh contacts state from store
-              setContacts(loadContacts(identity.id));
-            }
-          }
+          // 🔸 REMOVED: auto-create contacts for all other members
+          // We now rely on ad-hoc session keys (derived via deriveSessionKey)
+          // so we don't need to pollute the contact list.
 
           console.log(
             "[client] applied group-event",
@@ -1165,7 +1176,7 @@ function ChatShell({
     return () => {
       try {
         socket?.close();
-      } catch {}
+      } catch { }
       setWs(null);
     };
   }, [
@@ -1178,7 +1189,6 @@ function ChatShell({
     activeGroupId,
   ]);
 
-
   const handleSend = async () => {
     const text = input.trim();
     if (!text) return;
@@ -1189,7 +1199,7 @@ function ChatShell({
     if (activeGroup) {
       setInput("");
 
-      // Optimistic local echo
+      // optimistic local echo
       setMessages((prev) => [
         ...prev,
         {
@@ -1200,49 +1210,98 @@ function ChatShell({
         },
       ]);
 
+      // 1) Ensure we have a sender key state (in case we didn't already)
+      let bundle: SenderKeyBundle;
+      try {
+        bundle = await ensureSelfSenderKeyState(
+          identity.id,
+          activeGroup.id,
+          identity.publicKey
+        );
+      } catch (err) {
+        console.error(
+          "[client] failed to ensure sender key state for group",
+          err
+        );
+        return;
+      }
+      // 1a) If this is a brand-new sender key, broadcast the bundle
+      // 1a) If this is a brand-new sender key, broadcast the bundle
+      // SECURELY: Unicast encrypted bundle to each member
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const recipients = activeGroup.memberPublicKeys.filter(
+          (pk) => pk !== identity.publicKey
+        );
+
+        for (const recipientPk of recipients) {
+          // We perform ad-hoc ECDH for each recipient
+          // This works even if they are NOT in our contacts list (strangers)
+          deriveSessionKey(identity.secretKey, recipientPk)
+            .then(({ key: sharedKey }) => {
+              return encryptMessage(sharedKey, JSON.stringify(bundle));
+            })
+            .then(({ ciphertext, nonce }) => {
+              ws!.send(
+                JSON.stringify({
+                  type: "group-sender-key-bundle",
+                  from: identity.publicKey,
+                  to: recipientPk, // unicast
+                  ciphertext,
+                  nonce,
+                })
+              );
+            })
+            .catch((err) => {
+              console.warn(
+                "[client] failed to send secure bundle to",
+                recipientPk,
+                err
+              );
+            });
+        }
+      }
+
+      // 2) Encrypt once via sender key
+      let payload;
+      try {
+        payload = await encryptGroupMessageAsSender(
+          activeGroup.id,
+          identity.publicKey,
+          text
+        );
+      } catch (err) {
+        console.error(
+          "[client] failed to encrypt group message via sender key",
+          err
+        );
+        return;
+      }
+
+      const { counter, ciphertext, signature } = payload;
+
+      // 3) Send same ciphertext to each member (server just relays)
       const recipientPks = activeGroup.memberPublicKeys.filter(
         (pk) => pk !== identity.publicKey
       );
 
       for (const recipientPk of recipientPks) {
-        const contact = contacts.find(
-          (c) => c.publicKey === recipientPk && c.sharedKey
-        );
-        if (!contact || !contact.sharedKey) {
-          console.warn(
-            "[client] no sharedKey for group member",
-            recipientPk.slice(0, 16),
-            "– skipping"
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "message",
+              from: identity.publicKey,
+              to: recipientPk,
+              ciphertext,
+              // nonce no longer needed for sender-key AEAD; keep null for now
+              nonce: null,
+              timestamp: now,
+              groupId: activeGroup.id,
+              counter,
+              signature,
+            })
           );
-          continue;
-        }
-
-        try {
-          const encrypted = await encryptMessage(contact.sharedKey, text);
-
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(
-              JSON.stringify({
-                type: "message",
-                from: identity.publicKey,
-                to: recipientPk,
-                ciphertext: encrypted.ciphertext,
-                nonce: encrypted.nonce,
-                timestamp: now,
-                groupId: activeGroup.id,
-              })
-            );
-          } else {
-            console.warn(
-              "[client] ws not connected, group message not relayed"
-            );
-          }
-        } catch (err) {
-          console.error(
-            "[client] failed to encrypt/send group msg to",
-            recipientPk.slice(0, 16),
-            err
-          );
+        } else {
+          console.warn("[client] ws not connected, group message not relayed");
         }
       }
 
@@ -1250,7 +1309,7 @@ function ChatShell({
       return;
     }
 
-    // DIRECT MESSAGE MODE
+    // DIRECT MESSAGE MODE (unchanged)
     if (!activeContact || !activeContact.sharedKey) return;
     setInput("");
 
@@ -1292,13 +1351,13 @@ function ChatShell({
     updateIdentityLastActive(identity.id);
   };
 
+
   return (
     <div className="flex h-screen bg-black text-white font-mono">
       {/* Sidebar */}
       <div
-        className={`fixed md:relative z-40 md:z-auto h-full border-r border-neutral-700 bg-neutral-900 transition-all duration-300 overflow-hidden flex flex-col ${
-          sidebarOpen ? "w-80" : "w-0 md:w-80"
-        }`}
+        className={`fixed md:relative z-40 md:z-auto h-full border-r border-neutral-700 bg-neutral-900 transition-all duration-300 overflow-hidden flex flex-col ${sidebarOpen ? "w-80" : "w-0 md:w-80"
+          }`}
       >
         <div className="flex flex-col h-full">
           <div className="flex-shrink-0 border-b border-neutral-700 p-4">
@@ -1321,21 +1380,19 @@ function ChatShell({
           <div className="flex-shrink-0 flex border-b border-neutral-700 bg-neutral-800/30">
             <button
               onClick={() => setViewMode("contacts")}
-              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
-                viewMode === "contacts"
-                  ? "border-orange-500 text-orange-400"
-                  : "border-transparent text-neutral-400 hover:text-neutral-300"
-              }`}
+              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${viewMode === "contacts"
+                ? "border-orange-500 text-orange-400"
+                : "border-transparent text-neutral-400 hover:text-neutral-300"
+                }`}
             >
               DIRECT
             </button>
             <button
               onClick={() => setViewMode("groups")}
-              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${
-                viewMode === "groups"
-                  ? "border-orange-500 text-orange-400"
-                  : "border-transparent text-neutral-400 hover:text-neutral-300"
-              }`}
+              className={`flex-1 px-3 py-2 text-xs font-bold uppercase tracking-wider transition-colors border-b-2 ${viewMode === "groups"
+                ? "border-orange-500 text-orange-400"
+                : "border-transparent text-neutral-400 hover:text-neutral-300"
+                }`}
             >
               GROUPS
             </button>
@@ -1365,11 +1422,10 @@ function ChatShell({
                           setActiveGroupId(null);
                           setSidebarOpen(false);
                         }}
-                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${
-                          activeContactId === c.id && viewMode === "contacts"
-                            ? "border-orange-400 bg-orange-500/20"
-                            : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
-                        }`}
+                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${activeContactId === c.id && viewMode === "contacts"
+                          ? "border-orange-400 bg-orange-500/20"
+                          : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
+                          }`}
                       >
                         <div className="font-bold text-white truncate">
                           {c.codename}
@@ -1413,11 +1469,10 @@ function ChatShell({
                           setActiveContactId(null);
                           setSidebarOpen(false);
                         }}
-                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${
-                          activeGroupId === group.id
-                            ? "border-orange-400 bg-orange-500/20"
-                            : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
-                        }`}
+                        className={`w-full text-left p-3 rounded border transition-all text-sm relative ${activeGroupId === group.id
+                          ? "border-orange-400 bg-orange-500/20"
+                          : "border-neutral-700 hover:border-neutral-600 hover:bg-neutral-800/50"
+                          }`}
                       >
                         <div className="flex items-center gap-2">
                           <div className="h-2 w-2 rounded-full bg-orange-500/60" />
@@ -1853,7 +1908,7 @@ export default function Page() {
   if (!loaded) {
     return (
       <div className="flex h-screen items-center justify-center bg-black text-orange-400 font-mono overflow-hidden relative">
-        
+
         <div className="absolute inset-0 pointer-events-none bg-repeat opacity-10" style={{
           backgroundImage: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 1px, transparent 1px, transparent 2px)',
           animation: 'crt-flicker 0.15s infinite'
@@ -1861,7 +1916,7 @@ export default function Page() {
 
         {/* --- Main Content --- */}
         <div className="z-10 relative w-full max-w-lg px-4"> {/* Container widened */}
-          
+
           {/* Title */}
           <div className="mb-10 text-center relative">
             <h1 className="text-4xl md:text-5xl font-bold tracking-widest mb-2 glitch-text" data-text="CIPHER NODE">
@@ -1872,7 +1927,7 @@ export default function Page() {
 
           {/* --- NEW: TERMINAL WINDOW --- */}
           <div className="w-full border border-orange-500/50 bg-black/90 shadow-[0_0_20px_rgba(234,88,12,0.2)] rounded-md overflow-hidden backdrop-blur-sm">
-            
+
             {/* Terminal Header Bar */}
             <div className="flex items-center justify-between px-3 py-1.5 bg-orange-900/20 border-b border-orange-500/30">
               <div className="flex gap-1.5">
