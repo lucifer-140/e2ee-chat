@@ -1,6 +1,6 @@
 // relay-server.js
 // Very simple E2EE-friendly WebSocket relay.
-// It never sees plaintext, only { from, to, ciphertext, nonce, timestamp }.
+// It never sees plaintext, only small JSON envelopes.
 
 const WebSocket = require("ws");
 
@@ -19,7 +19,12 @@ function registerConnection(publicKey, ws) {
     connections.set(publicKey, set);
   }
   set.add(ws);
-  console.log(`[relay] Registered connection for ${publicKey.slice(0, 16)}… (total=${set.size})`);
+  console.log(
+    `[relay] Registered connection for ${publicKey.slice(
+      0,
+      16
+    )}… (total=${set.size})`
+  );
 }
 
 /**
@@ -32,7 +37,12 @@ function unregisterConnection(ws) {
       if (set.size === 0) {
         connections.delete(pub);
       }
-      console.log(`[relay] Connection closed for ${pub.slice(0, 16)}… remaining=${set.size}`);
+      console.log(
+        `[relay] Connection closed for ${pub.slice(
+          0,
+          16
+        )}… remaining=${set.size}`
+      );
     }
   }
 }
@@ -53,31 +63,49 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ─────────────────────────
+    // 1) Registration
+    //    { type: "register", publicKey }
+    // ─────────────────────────
     if (msg.type === "register" && typeof msg.publicKey === "string") {
       registerConnection(msg.publicKey, ws);
       return;
     }
 
+    // ─────────────────────────
+    // 2) Direct / group-tagged 1:1 messages
+    //    { type: "message", from, to, ciphertext, nonce, timestamp, groupId? }
+    // ─────────────────────────
     if (msg.type === "message") {
-      const { from, to, ciphertext, nonce, timestamp } = msg;
+      const {
+        from,
+        to,
+        ciphertext,
+        nonce,
+        timestamp,
+        groupId,
+        counter,
+        signature,
+      } = msg;
       if (typeof to !== "string" || typeof from !== "string") return;
 
       const recSet = connections.get(to);
       if (!recSet || recSet.size === 0) {
-        // recipient offline (for now we just drop; you can later add persistence/queue)
         console.log(
           `[relay] Recipient offline for ${to.slice(0, 16)}…, msg dropped`
         );
         return;
       }
 
-      // Forward to all sockets registered for this recipient
       const payload = JSON.stringify({
         type: "message",
         from,
         ciphertext,
-        nonce,
+        nonce: nonce ?? null,
         timestamp,
+        ...(groupId ? { groupId } : {}),
+        ...(typeof counter === "number" ? { counter } : {}),
+        ...(signature ? { signature } : {}),
       });
 
       for (const client of recSet) {
@@ -87,9 +115,221 @@ wss.on("connection", (ws) => {
       }
 
       console.log(
-        `[relay] Forwarded message ${from.slice(0, 16)}… -> ${to.slice(0, 16)}…`
+        `[relay] Forwarded message ${from.slice(0, 16)}… -> ${to.slice(
+          0,
+          16
+        )}…` +
+        (groupId ? ` (groupId=${groupId}, counter=${counter ?? "?"})` : "")
       );
+      return;
     }
+
+
+
+    // ─────────────────────────
+    // 3) Group events
+    //    { type: "group-event", from, to: string|string[], event }
+    // ─────────────────────────
+    if (msg.type === "group-event") {
+      const { from, to, event } = msg;
+      if (typeof from !== "string") return;
+
+      const recipients = Array.isArray(to) ? to : [to];
+
+      const payload = JSON.stringify({
+        type: "group-event",
+        from,
+        event,
+      });
+
+      let deliveredCount = 0;
+
+      for (const pk of recipients) {
+        if (typeof pk !== "string") continue;
+        const recSet = connections.get(pk);
+        if (!recSet || recSet.size === 0) {
+          console.log(
+            `[relay] group-event for ${pk.slice(
+              0,
+              16
+            )}… – no active connections`
+          );
+          continue;
+        }
+        for (const client of recSet) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+            deliveredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `[relay] Forwarded group-event '${event?.type}' from ${from.slice(
+          0,
+          16
+        )}… to ${recipients.length} recipient(s), delivered=${deliveredCount}`
+      );
+      return;
+    }
+
+    // ─────────────────────────
+    // 4) Sender-key bundle (for Signal-style group crypto)
+    //    { type: "sender-key", from, to: string|string[], ciphertext, nonce, timestamp }
+    //    (ciphertext/nonce are E2E encrypted with pairwise sharedKey)
+    // ─────────────────────────
+    if (msg.type === "sender-key") {
+      const { from, to, ciphertext, nonce, timestamp } = msg;
+      if (typeof from !== "string") return;
+
+      const recipients = Array.isArray(to) ? to : [to];
+
+      const payload = JSON.stringify({
+        type: "sender-key",
+        from,
+        ciphertext,
+        nonce,
+        timestamp,
+      });
+
+      let deliveredCount = 0;
+
+      for (const pk of recipients) {
+        if (typeof pk !== "string") continue;
+        const recSet = connections.get(pk);
+        if (!recSet || recSet.size === 0) {
+          console.log(
+            `[relay] sender-key for ${pk.slice(
+              0,
+              16
+            )}… – no active connections`
+          );
+          continue;
+        }
+        for (const client of recSet) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+            deliveredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `[relay] Forwarded sender-key from ${from.slice(
+          0,
+          16
+        )}… to ${recipients.length} recipient(s), delivered=${deliveredCount}`
+      );
+      return;
+    }
+
+    // ─────────────────────────
+    // 4b) Sender-key bundle for new Signal-style group crypto
+    //     { type: "group-sender-key-bundle", from, to: string|string[], bundle }
+    // ─────────────────────────
+    if (msg.type === "group-sender-key-bundle") {
+      const { from, to, bundle, ciphertext, nonce } = msg;
+      if (typeof from !== "string") return;
+
+      const recipients = Array.isArray(to) ? to : [to];
+
+      const payload = JSON.stringify({
+        type: "group-sender-key-bundle",
+        from,
+        bundle,
+        ciphertext,
+        nonce,
+      });
+
+      let deliveredCount = 0;
+
+      for (const pk of recipients) {
+        if (typeof pk !== "string") continue;
+        const recSet = connections.get(pk);
+        if (!recSet || recSet.size === 0) {
+          console.log(
+            `[relay] group-sender-key-bundle for ${pk.slice(
+              0,
+              16
+            )}… – no active connections`
+          );
+          continue;
+        }
+        for (const client of recSet) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+            deliveredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `[relay] Forwarded group-sender-key-bundle from ${from.slice(
+          0,
+          16
+        )}… to ${recipients.length} recipient(s), delivered=${deliveredCount}`
+      );
+      return;
+    }
+
+
+    // ─────────────────────────
+    // 5) Group-message (Signal-style sender-key messages)
+    //    { type: "group-message", from, to: string|string[], packet }
+    //    packet = { kind:"group-message", groupId, senderIdentityKey, ... }
+    // ─────────────────────────
+    if (msg.type === "group-message") {
+      const { from, to, packet } = msg;
+      if (typeof from !== "string") return;
+
+      const recipients = Array.isArray(to) ? to : [to];
+
+      const payload = JSON.stringify({
+        type: "group-message",
+        from,
+        packet,
+      });
+
+      let deliveredCount = 0;
+
+      for (const pk of recipients) {
+        if (typeof pk !== "string") continue;
+        const recSet = connections.get(pk);
+        if (!recSet || recSet.size === 0) {
+          console.log(
+            `[relay] group-message for ${pk.slice(
+              0,
+              16
+            )}… – no active connections`
+          );
+          continue;
+        }
+        for (const client of recSet) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+            deliveredCount++;
+          }
+        }
+      }
+
+      console.log(
+        `[relay] Forwarded group-message from ${from.slice(
+          0,
+          16
+        )}… to ${recipients.length} recipient(s), delivered=${deliveredCount}`
+      );
+      return;
+    }
+
+    // ─────────────────────────
+    // 6) Group sender-key bundle (for Signal-style group crypto)
+    //    { type: "group-sender-key-bundle", from, to: string|string[], bundle }
+    // ─────────────────────────
+
+
+
+    // Any unknown message type gets ignored
+    console.log("[relay] Unknown msg type:", msg.type);
   });
 
   ws.on("close", () => {

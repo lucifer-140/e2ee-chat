@@ -1,36 +1,119 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# E2EE Chat (Clean & Secure)
 
-## Getting Started
+A secure, end-to-end encrypted (E2EE) chat application built with Next.js, React 19, and `libsodium`. Designed for privacy, it features a zero-knowledge relay server and robust client-side encryption for both direct and group messaging.
 
-First, run the development server:
+## 🚀 Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+*   **End-to-End Encryption**: All messages are encrypted on the device before sending. The server never sees plaintext.
+*   **Secure Identity**: Identities are generated locally using Ed25519 keys and protected by a passphrase. Keys never leave your browser.
+*   **1:1 Messaging**: Secure direct chats using XChaCha20-Poly1305 and ECDH key exchange.
+*   **Group Messaging**: Scalable, secure group chats using Signal-style "Sender Keys" protocol.
+*   **Zero-Knowledge Server**: The relay server is "dumb" and stateless. It only forwards encrypted blobs and handles basic routing.
+*   **Group Management**:
+    *   Create private groups.
+    *   Add members (Admin only).
+    *   Kick members (Admin only).
+    *   Leave groups.
+    *   Real-time membership updates.
+*   **Persistence**:
+    *   Encrypted local storage for identities and keys.
+    *   Local message history (cleared on logout/leave/kick).
+*   **Modern UI**: Built with Tailwind CSS v4, featuring a dark, hacker-aesthetic interface.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 🛡️ Security Architecture
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+This project prioritizes security and privacy:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Cryptography
+*   **Library**: `libsodium-wrappers-sumo` (WebAssembly).
+*   **Identity**: Ed25519 key pairs for signing and identification.
+*   **Key Exchange**: X25519 (Curve25519) for ECDH shared secret derivation.
+*   **Encryption**: XChaCha20-Poly1305 (AEAD) for message encryption.
+*   **Hashing**: BLAKE2b for key derivation (HKDF-like usage).
 
-## Learn More
+### Protocol
+1.  **1:1 Chats**:
+    *   Users exchange public keys via a secure side-channel (e.g., QR code or manual entry).
+    *   Shared session keys are derived using ECDH (Sender's Secret + Recipient's Public).
+    *   Messages are encrypted with unique nonces.
 
-To learn more about Next.js, take a look at the following resources:
+2.  **Group Chats (Sender Keys)**:
+    *   Each member generates a random 32-byte **Chain Key**.
+    *   This Chain Key is distributed to other members via 1:1 encrypted channels (Sender Key Bundle).
+    *   Messages are encrypted using a **Message Key** derived from the Chain Key.
+    *   The Chain Key ratchets forward after every message (Forward Secrecy).
+    *   When membership changes (leave/kick), keys are rotated to ensure future secrecy.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 🛠️ Prerequisites
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+*   **Node.js**: v18 or higher.
+*   **npm** or **pnpm**.
 
-## Deploy on Vercel
+## 📦 Installation
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1.  **Clone the repository**:
+    ```bash
+    git clone <repository-url>
+    cd e2ee-chat-clean
+    ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+2.  **Install dependencies**:
+    ```bash
+    npm install
+    # or
+    pnpm install
+    ```
+
+## 🏃‍♂️ Running the Application
+
+You need to run both the relay server and the client application.
+
+1.  **Start the Relay Server** (Terminal 1):
+    ```bash
+    node relay-server.js
+    ```
+    *Runs on `ws://localhost:4000`*
+
+2.  **Start the Client** (Terminal 2):
+    ```bash
+    npm run dev
+    ```
+    *Runs on `http://localhost:3000`*
+
+## 📖 Usage Guide
+
+### 1. Create an Identity
+*   Open the app.
+*   Enter a **Codename** (public alias) and a strong **Passphrase**.
+*   Your secure identity is created and stored in your browser's Local Storage.
+
+### 2. Add Contacts
+*   Share your **Public Key** or **Contact Bundle** (found in the sidebar) with a friend.
+*   Click **"+ ADD CONTACT"**.
+*   Enter their Codename and paste their Public Key/Bundle.
+*   Once added, you can start a secure 1:1 chat.
+
+### 3. Create a Group
+*   Click **"+ NEW GROUP"**.
+*   Enter a Group Name.
+*   Select the contacts you want to include.
+*   Click "CREATE GROUP".
+
+### 4. Manage Groups
+*   **Add Member**: Open Group Info -> Click "+ ADD MEMBER" (Creator only).
+*   **Kick Member**: Open Group Info -> Click "KICK" next to a member's name (Creator only).
+*   **Leave Group**: Open Group Info -> Click "LEAVE GROUP".
+    *   *Note: Leaving or being kicked will delete your local chat history for that group.*
+
+## 📂 Project Structure
+
+*   `src/app/page.tsx`: Main application logic (UI, State, WebSocket handling).
+*   `src/lib/crypto/`: Core cryptographic wrappers (session keys, fingerprinting).
+*   `src/lib/groups/`: Group management logic (store, sender keys protocol).
+*   `src/lib/identities/`: Identity management (creation, unlocking, storage).
+*   `src/lib/messages/`: Message storage and persistence.
+*   `relay-server.js`: The WebSocket relay server.
+
+## ⚠️ Disclaimer
+
+This project is for **educational purposes**. While it uses production-grade cryptographic primitives (`libsodium`), it has not undergone a formal security audit. Use at your own risk for sensitive communications.
