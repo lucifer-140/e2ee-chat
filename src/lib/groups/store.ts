@@ -6,7 +6,7 @@ export interface GroupChat {
   identityId: string;
   name: string;
   memberPublicKeys: string[];
-  creatorPublicKey: string; // 🔸 NEW
+  creatorPublicKey: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +94,14 @@ export type GroupEvent =
     type: "kick";
     groupId: string;
     targetPublicKey: string;
+  }
+  | {
+    type: "add";
+    groupId: string;
+    groupName: string;
+    creatorPublicKey: string;
+    newMemberPublicKey: string;
+    allMembers: string[];
   };
 
 export function applyGroupEvent(
@@ -101,11 +109,6 @@ export function applyGroupEvent(
   myPublicKey: string,
   event: GroupEvent
 ): GroupChat[] {
-  // For create/update, only care if I'm a member
-  if (event.type === "create" && !event.members.includes(myPublicKey)) {
-    return loadGroups(identityId);
-  }
-
   const now = new Date().toISOString();
   const existing = loadGroups(identityId);
   const idx = existing.findIndex((g) => g.id === event.groupId);
@@ -121,7 +124,9 @@ export function applyGroupEvent(
       return next;
     }
     // Else remove them from members
-    const nextMembers = group.memberPublicKeys.filter((k) => k !== event.publicKey);
+    const nextMembers = group.memberPublicKeys.filter(
+      (k) => k !== event.publicKey
+    );
     const updated: GroupChat = {
       ...group,
       memberPublicKeys: nextMembers,
@@ -144,7 +149,9 @@ export function applyGroupEvent(
       return next;
     }
     // Else remove target
-    const nextMembers = group.memberPublicKeys.filter((k) => k !== event.targetPublicKey);
+    const nextMembers = group.memberPublicKeys.filter(
+      (k) => k !== event.targetPublicKey
+    );
     const updated: GroupChat = {
       ...group,
       memberPublicKeys: nextMembers,
@@ -156,8 +163,53 @@ export function applyGroupEvent(
     return next;
   }
 
+  // Handle ADD
+  if (event.type === "add") {
+    // If I am the new member -> Create the group for me
+    if (event.newMemberPublicKey === myPublicKey) {
+      const exists = existing.find((g) => g.id === event.groupId);
+      if (!exists) {
+        const newGroup: GroupChat = {
+          id: event.groupId,
+          identityId,
+          name: event.groupName,
+          memberPublicKeys: event.allMembers,
+          createdAt: now,
+          updatedAt: now,
+          creatorPublicKey: event.creatorPublicKey,
+        };
+        const next = [...existing, newGroup];
+        saveGroups(identityId, next);
+        return next;
+      }
+      return existing;
+    } else {
+      // Someone else was added -> Update my list
+      if (idx === -1) return existing;
+      const group = existing[idx];
+      if (!group.memberPublicKeys.includes(event.newMemberPublicKey)) {
+        const nextMembers = [...group.memberPublicKeys, event.newMemberPublicKey];
+        const updated: GroupChat = {
+          ...group,
+          memberPublicKeys: nextMembers,
+          updatedAt: now,
+        };
+        const next = [...existing];
+        next[idx] = updated;
+        saveGroups(identityId, next);
+        return next;
+      }
+      return existing;
+    }
+  }
+
   // Handle CREATE / UPDATE
   if (event.type === "create") {
+    // Only care if I'm a member
+    if (!event.members.includes(myPublicKey)) {
+      return existing;
+    }
+
     if (idx >= 0) {
       const updated: GroupChat = {
         ...existing[idx],

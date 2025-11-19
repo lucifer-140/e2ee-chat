@@ -26,8 +26,10 @@ import {
 
 import {
   loadMessagesForContact,
-  addMessageForContact,
+  addMessage,
+  loadMessagesForGroup,
   deleteMessagesForContacts,
+  deleteMessagesForGroup,
   StoredMessage,
 } from "@/lib/messages/store";
 
@@ -840,6 +842,7 @@ function GroupInfoModal({
   onClose,
   onLeave,
   onKick,
+  onAddMember,
 }: {
   group: GroupChat;
   identity: UnlockedIdentity;
@@ -847,6 +850,7 @@ function GroupInfoModal({
   onClose: () => void;
   onLeave: () => void;
   onKick: (targetPk: string) => void;
+  onAddMember: () => void;
 }) {
   // Handle legacy groups where creatorPublicKey might be missing
   const creatorPk = group.creatorPublicKey || group.memberPublicKeys[0];
@@ -859,9 +863,19 @@ function GroupInfoModal({
           <h2 className="text-sm font-bold text-orange-400 uppercase tracking-widest">
             GROUP INFO
           </h2>
-          <button onClick={onClose}>
-            <X className="h-4 w-4 text-neutral-500 hover:text-white" />
-          </button>
+          <div className="flex gap-2">
+            {isCreator && (
+              <button
+                onClick={onAddMember}
+                className="text-xs font-bold text-orange-400 hover:text-orange-300 uppercase tracking-wider border border-orange-500/50 px-2 py-1 rounded hover:bg-orange-500/10 transition-colors"
+              >
+                + ADD MEMBER
+              </button>
+            )}
+            <button onClick={onClose}>
+              <X className="h-4 w-4 text-neutral-500 hover:text-white" />
+            </button>
+          </div>
         </div>
 
         <div className="mb-6">
@@ -930,6 +944,112 @@ function GroupInfoModal({
   );
 }
 
+// Add Member Modal
+function AddMemberModal({
+  group,
+  contacts,
+  onClose,
+  onAdd,
+}: {
+  group: GroupChat;
+  contacts: Contact[];
+  onClose: () => void;
+  onAdd: (publicKey: string) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  // Filter out contacts already in the group
+  const availableContacts = contacts.filter(
+    (c) => !group.memberPublicKeys.includes(c.publicKey)
+  );
+
+  const toggleContact = (publicKey: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(publicKey)) next.delete(publicKey);
+      else next.add(publicKey);
+      return next;
+    });
+  };
+
+  const handleAddMembers = () => {
+    setError(null);
+    if (selected.size === 0) {
+      setError("Select at least one contact to add");
+      return;
+    }
+
+    // For simplicity, we'll only add the first selected member for now
+    // In a real app, you might add all selected members in a batch
+    const newMemberPk = Array.from(selected)[0];
+    onAdd(newMemberPk);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="w-full max-w-sm rounded border border-neutral-700 bg-neutral-900 p-6 font-mono shadow-xl max-h-[80vh] overflow-y-auto">
+        <h2 className="mb-4 text-sm font-bold text-orange-400 uppercase tracking-widest">
+          ADD MEMBER TO {group.name.toUpperCase()}
+        </h2>
+
+        <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2 block">
+          Select Contact
+        </label>
+        <div className="max-h-40 overflow-y-auto mb-3 space-y-1">
+          {availableContacts.length === 0 && (
+            <p className="text-xs text-neutral-500">
+              All your contacts are already in this group or you have no other contacts.
+            </p>
+          )}
+          {availableContacts.map((c) => {
+            const checked = selected.has(c.publicKey);
+            return (
+              <label
+                key={c.id}
+                className="flex items-center gap-2 text-xs text-neutral-200 cursor-pointer hover:bg-neutral-800/60 px-2 py-1 rounded"
+              >
+                <input
+                  type="checkbox"
+                  className="h-3 w-3"
+                  checked={checked}
+                  onChange={() => toggleContact(c.publicKey)}
+                />
+                <span className="font-bold truncate">{c.codename}</span>
+                <span className="text-[9px] text-neutral-500 truncate">
+                  {c.publicKey.slice(0, 12)}…
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-400 border-l-2 border-red-500 pl-2 mb-2">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-3 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 text-xs font-medium text-neutral-400 hover:text-white transition-colors"
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={handleAddMembers}
+            disabled={selected.size === 0}
+            className="rounded bg-orange-500 px-4 py-2 text-xs font-bold text-black hover:bg-orange-400 transition-colors disabled:opacity-50"
+          >
+            ADD MEMBER
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ───────────────────────────────────────────────
 // Main chat shell
 // ───────────────────────────────────────────────
@@ -960,6 +1080,7 @@ function ChatShell({
   const [showIdentityDetails, setShowIdentityDetails] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showAddMember, setShowAddMember] = useState(false);
   const [strangerCodenames, setStrangerCodenames] = useState<Record<string, string>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1036,8 +1157,7 @@ function ChatShell({
       // GROUP CHAT MODE: currently we don't have local history for groups,
       // just ensure sender key exists, then clear messages.
       if (activeGroup) {
-        setMessages([]);
-
+        // Ensure sender key state for self
         try {
           await ensureSelfSenderKeyState(
             identity.id,
@@ -1047,6 +1167,17 @@ function ChatShell({
         } catch (err) {
           console.error("Failed to initialize sender key for group", err);
         }
+
+        // Load persisted group messages
+        const stored = loadMessagesForGroup(activeGroup.id);
+        const decrypted: DecryptedMessage[] = stored.map((m) => ({
+          id: m.id,
+          direction: m.direction,
+          plaintext: m.plaintext || "", // Group messages are stored as plaintext
+          timestamp: m.timestamp,
+          sender: m.sender,
+        }));
+        setMessages(decrypted);
 
         return;
       }
@@ -1064,6 +1195,7 @@ function ChatShell({
 
         for (const m of stored as StoredMessage[]) {
           try {
+            if (!m.ciphertext) continue;
             const plaintext = await decryptMessage(
               activeContact.sharedKey,
               m.nonce,
@@ -1232,28 +1364,29 @@ function ChatShell({
               return;
             }
 
-            const plaintext = await decryptMessage(
-              contact.sharedKey,
-              nonce,
-              ciphertext
-            );
-
-            addMessageForContact(
+            // Persist incoming 1:1 message
+            const stored = addMessage(
               contact.id,
+              "direct",
               "in",
-              ciphertext,
-              nonce,
-              timestamp
+              data.ciphertext,
+              data.nonce
             );
 
-            if (contact.id === activeContactId) {
+            // If active, show it
+            if (activeContact && activeContact.id === contact.id) {
+              const plaintext = await decryptMessage(
+                contact.sharedKey,
+                data.nonce,
+                data.ciphertext
+              );
               setMessages((prev) => [
                 ...prev,
                 {
-                  id: safeRandomId(),
+                  id: stored.id,
                   direction: "in",
                   plaintext,
-                  timestamp,
+                  timestamp: stored.timestamp,
                 },
               ]);
             }
@@ -1281,17 +1414,25 @@ function ChatShell({
             return;
           }
 
+          // Persist incoming group message
+          const stored = addMessage(
+            group.id,
+            "group",
+            "in",
+            plaintext,
+            undefined,
+            data.from
+          );
+
           if (activeGroupId === groupId) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: safeRandomId(),
-                direction: "in",
-                plaintext,
-                timestamp,
-                sender: from,
-              },
-            ]);
+            const newMessage: DecryptedMessage = {
+              id: stored.id,
+              direction: "in",
+              plaintext,
+              timestamp: stored.timestamp,
+              sender: data.from,
+            };
+            setMessages((prev) => [...prev, newMessage]);
           }
         }
 
@@ -1312,6 +1453,7 @@ function ChatShell({
             (evt.type === "leave" && evt.publicKey === identity.publicKey) ||
             (evt.type === "kick" && evt.targetPublicKey === identity.publicKey)
           ) {
+            deleteMessagesForGroup(evt.groupId);
             if (activeGroupId === evt.groupId) {
               setActiveGroupId(null);
             }
@@ -1356,19 +1498,6 @@ function ChatShell({
 
     // GROUP CHAT MODE
     if (activeGroup) {
-      setInput("");
-
-      // optimistic local echo
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: safeRandomId(),
-          direction: "out",
-          plaintext: text,
-          timestamp: now,
-        },
-      ]);
-
       // 1) Ensure we have a sender key state (in case we didn't already)
       let bundle: SenderKeyBundle;
       try {
@@ -1439,6 +1568,27 @@ function ChatShell({
 
       const { counter, ciphertext, signature } = payload;
 
+      // 2) Persist locally
+      const stored = addMessage(
+        activeGroup.id,
+        "group",
+        "out",
+        input,
+        undefined,
+        identity.publicKey
+      );
+
+      // 3) Update UI
+      const newMessage: DecryptedMessage = {
+        id: stored.id,
+        direction: "out",
+        plaintext: input,
+        timestamp: stored.timestamp,
+        sender: identity.publicKey,
+      };
+      setMessages((prev) => [...prev, newMessage]);
+      setInput("");
+
       // 3) Send same ciphertext to each member (server just relays)
       const recipientPks = activeGroup.memberPublicKeys.filter(
         (pk) => pk !== identity.publicKey
@@ -1475,12 +1625,12 @@ function ChatShell({
 
     const encrypted = await encryptMessage(activeContact.sharedKey, text);
 
-    addMessageForContact(
+    addMessage(
       activeContact.id,
+      "direct",
       "out",
       encrypted.ciphertext,
-      encrypted.nonce,
-      now
+      encrypted.nonce
     );
 
     setMessages((prev) => [
@@ -2024,6 +2174,7 @@ function ChatShell({
         />
       )}
 
+      {/* Group Info Modal */}
       {showGroupInfo && activeGroup && (
         <GroupInfoModal
           group={activeGroup}
@@ -2031,34 +2182,32 @@ function ChatShell({
           contacts={contacts}
           onClose={() => setShowGroupInfo(false)}
           onLeave={() => {
-            // Broadcast LEAVE event
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              const evt: GroupEvent = {
-                type: "leave",
-                groupId: activeGroup.id,
-                publicKey: identity.publicKey,
-              };
-              const recipients = activeGroup.memberPublicKeys.filter(
-                (pk) => pk !== identity.publicKey
-              );
-              if (recipients.length > 0) {
-                ws.send(
-                  JSON.stringify({
-                    type: "group-event",
-                    from: identity.publicKey,
-                    to: recipients,
-                    event: evt,
-                  })
-                );
-              }
-            }
-            // Update local state
-            const updated = applyGroupEvent(identity.id, identity.publicKey, {
+            // Send LEAVE event
+            if (!ws) return;
+            const event: GroupEvent = {
               type: "leave",
               groupId: activeGroup.id,
               publicKey: identity.publicKey,
-            });
+            };
+
+            const recipients = activeGroup.memberPublicKeys.filter(
+              (pk) => pk !== identity.publicKey
+            );
+
+            if (recipients.length > 0) {
+              ws.send(
+                JSON.stringify({
+                  type: "group-event",
+                  from: identity.publicKey,
+                  to: recipients,
+                  event,
+                })
+              );
+            }
+            // Apply locally
+            const updated = applyGroupEvent(identity.id, identity.publicKey, event);
             setGroupChats(updated);
+            deleteMessagesForGroup(activeGroup.id); // Clear history
             setActiveGroupId(null);
             setShowGroupInfo(false);
           }}
@@ -2091,6 +2240,51 @@ function ChatShell({
               targetPublicKey: targetPk,
             });
             setGroupChats(updated);
+          }}
+          onAddMember={() => {
+            setShowGroupInfo(false);
+            setShowAddMember(true);
+          }}
+        />
+      )}
+
+      {/* Add Member Modal */}
+      {showAddMember && activeGroup && (
+        <AddMemberModal
+          group={activeGroup}
+          contacts={contacts}
+          onClose={() => setShowAddMember(false)}
+          onAdd={(newMemberPk) => {
+            if (!ws) return;
+            const event: GroupEvent = {
+              type: "add",
+              groupId: activeGroup.id,
+              groupName: activeGroup.name,
+              creatorPublicKey: activeGroup.creatorPublicKey,
+              newMemberPublicKey: newMemberPk,
+              allMembers: [...activeGroup.memberPublicKeys, newMemberPk],
+            };
+
+            // Send to NEW member AND existing members (excluding self)
+            const recipients = [
+              newMemberPk,
+              ...activeGroup.memberPublicKeys.filter(
+                (pk) => pk !== identity.publicKey
+              ),
+            ];
+
+            ws.send(
+              JSON.stringify({
+                type: "group-event",
+                from: identity.publicKey,
+                to: recipients,
+                event,
+              })
+            );
+            const updated = applyGroupEvent(identity.id, identity.publicKey, event);
+            setGroupChats(updated);
+            setShowAddMember(false);
+            setShowGroupInfo(true); // Re-open info
           }}
         />
       )}

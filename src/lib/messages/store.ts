@@ -5,10 +5,13 @@ export type MessageDirection = "out" | "in";
 
 export interface StoredMessage {
   id: string;
-  contactId: string;
+  contactId?: string; // for 1:1
+  groupId?: string;   // for groups
+  sender?: string;    // for groups (who sent it)
   direction: MessageDirection;
-  ciphertext: string;
-  nonce: string;
+  ciphertext?: string; // for 1:1
+  plaintext?: string;  // for groups (stored as plaintext for now)
+  nonce?: string;
   timestamp: string; // ISO string
 }
 
@@ -35,23 +38,36 @@ export function loadMessagesForContact(contactId: string): StoredMessage[] {
   return loadAllMessages().filter((m) => m.contactId === contactId);
 }
 
-export function addMessageForContact(
-  contactId: string,
+export function loadMessagesForGroup(groupId: string): StoredMessage[] {
+  return loadAllMessages().filter((m) => m.groupId === groupId);
+}
+
+export function addMessage(
+  targetId: string,
+  type: "direct" | "group",
   direction: MessageDirection,
-  ciphertext: string,
-  nonce: string,
-  timestamp: string
+  content: string, // ciphertext or plaintext
+  nonce?: string,
+  sender?: string
 ): StoredMessage {
   const all = loadAllMessages();
+  const now = new Date().toISOString();
 
   const msg: StoredMessage = {
     id: crypto.randomUUID(),
-    contactId,
     direction,
-    ciphertext,
-    nonce,
-    timestamp,
+    timestamp: now,
   };
+
+  if (type === "direct") {
+    msg.contactId = targetId;
+    msg.ciphertext = content;
+    msg.nonce = nonce;
+  } else {
+    msg.groupId = targetId;
+    msg.plaintext = content;
+    msg.sender = sender;
+  }
 
   const updated = [...all, msg];
   saveAllMessages(updated);
@@ -72,6 +88,13 @@ export function deleteMessagesForContacts(contactIds: string[]) {
   const all = loadAllMessages();
   const set = new Set(contactIds);
 
-  const filtered = all.filter((m) => !set.has(m.contactId));
+  const filtered = all.filter((m) => !m.contactId || !set.has(m.contactId));
+  saveAllMessages(filtered);
+}
+
+export function deleteMessagesForGroup(groupId: string) {
+  if (typeof window === "undefined") return;
+  const all = loadAllMessages();
+  const filtered = all.filter((m) => m.groupId !== groupId);
   saveAllMessages(filtered);
 }
