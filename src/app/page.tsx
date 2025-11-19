@@ -102,7 +102,6 @@ interface DecryptedMessage {
   plaintext: string;
   timestamp: string;
   sender?: string; // publicKey
-  senderCodename?: string;
 }
 
 function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -122,10 +121,16 @@ function MessageGroup({
   messages,
   direction,
   senderCodename,
+  isContact,
+  senderPublicKey,
+  onAddContact,
 }: {
   messages: DecryptedMessage[];
   direction: "in" | "out";
   senderCodename?: string;
+  isContact?: boolean;
+  senderPublicKey?: string;
+  onAddContact?: (key: string) => void;
 }) {
   const firstTime = new Date(messages[0].timestamp);
   const timeStr = firstTime.toLocaleTimeString([], {
@@ -145,9 +150,21 @@ function MessageGroup({
           }`}
       >
         {direction === "in" && senderCodename && (
-          <p className="text-xs font-bold text-orange-400 mb-1 uppercase tracking-wider">
-            {senderCodename}
-          </p>
+          <div className="mb-1">
+            {isContact ? (
+              <p className="text-xs font-bold text-orange-400 uppercase tracking-wider">
+                {senderCodename}
+              </p>
+            ) : (
+              <button
+                onClick={() => senderPublicKey && onAddContact?.(senderPublicKey)}
+                className="text-xs font-bold text-orange-400 uppercase tracking-wider hover:underline hover:text-orange-300 text-left"
+                title="Add to contacts"
+              >
+                {senderCodename} <span className="opacity-50 text-[10px]">(ADD)</span>
+              </button>
+            )}
+          </div>
         )}
         {messages.map((m) => (
           <p
@@ -590,13 +607,15 @@ function AddContactModal({
   identity,
   onClose,
   onAdded,
+  initialPublicKey,
 }: {
   identity: UnlockedIdentity;
   onClose: () => void;
   onAdded: () => void;
+  initialPublicKey?: string;
 }) {
   const [codename, setCodename] = useState("");
-  const [publicKey, setPublicKey] = useState("");
+  const [publicKey, setPublicKey] = useState(initialPublicKey || "");
   const [loading, setLoading] = useState(false);
 
   const handleAdd = async () => {
@@ -835,6 +854,7 @@ function ChatShell({
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [input, setInput] = useState("");
   const [showAddContact, setShowAddContact] = useState(false);
+  const [addContactPrefill, setAddContactPrefill] = useState<{ publicKey: string } | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [identityFp, setIdentityFp] = useState<string | null>(null);
   const [activeContactFp, setActiveContactFp] = useState<string | null>(null);
@@ -858,6 +878,22 @@ function ChatShell({
 
   const groupedMessages = messages.reduce((acc, msg) => {
     const lastGroup = acc[acc.length - 1];
+
+    // Derive sender info dynamically
+    let senderCodename: string | undefined;
+    let isContact = false;
+
+    if (msg.sender) {
+      const contact = contacts.find((c) => c.publicKey === msg.sender);
+      if (contact) {
+        senderCodename = contact.codename;
+        isContact = true;
+      } else {
+        senderCodename = `Member-${msg.sender.slice(0, 4)}`;
+        isContact = false;
+      }
+    }
+
     if (
       lastGroup &&
       lastGroup.direction === msg.direction &&
@@ -873,12 +909,13 @@ function ChatShell({
       acc.push({
         direction: msg.direction,
         sender: msg.sender,
-        senderCodename: msg.senderCodename,
+        senderCodename,
+        isContact,
         messages: [msg],
       });
     }
     return acc;
-  }, [] as Array<{ direction: "in" | "out"; messages: DecryptedMessage[]; sender?: string; senderCodename?: string }>);
+  }, [] as Array<{ direction: "in" | "out"; messages: DecryptedMessage[]; sender?: string; senderCodename?: string; isContact?: boolean }>);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1038,7 +1075,6 @@ function ChatShell({
         const data = JSON.parse(event.data);
 
         // 0) New: Sender key bundle for groups
-        // 0) New: Sender key bundle for groups
         if (data.type === "group-sender-key-bundle") {
           // Secure path: encrypted bundle
           if (data.ciphertext && data.nonce) {
@@ -1138,12 +1174,6 @@ function ChatShell({
           }
 
           if (activeGroupId === groupId) {
-            // Lookup sender codename
-            const senderContact = contacts.find((c) => c.publicKey === from);
-            const senderCodename = senderContact
-              ? senderContact.codename
-              : `Member-${from.slice(0, 4)}`;
-
             setMessages((prev) => [
               ...prev,
               {
@@ -1152,15 +1182,10 @@ function ChatShell({
                 plaintext,
                 timestamp,
                 sender: from,
-                senderCodename,
               },
             ]);
           }
-
-          // still no disk persistence for group messages for now
-          return;
         }
-
 
         // 2) Group events (create, rename, membership changes, etc.)
         if (data.type === "group-event") {
@@ -1173,10 +1198,6 @@ function ChatShell({
             evt
           );
           setGroupChats(updated);
-
-          // 🔸 REMOVED: auto-create contacts for all other members
-          // We now rely on ad-hoc session keys (derived via deriveSessionKey)
-          // so we don't need to pollute the contact list.
 
           console.log(
             "[client] applied group-event",
@@ -1754,6 +1775,12 @@ function ChatShell({
                   messages={group.messages}
                   direction={group.direction}
                   senderCodename={group.senderCodename}
+                  isContact={group.isContact}
+                  senderPublicKey={group.sender}
+                  onAddContact={(key) => {
+                    setAddContactPrefill({ publicKey: key });
+                    setShowAddContact(true);
+                  }}
                 />
               ))}
 
@@ -1806,7 +1833,11 @@ function ChatShell({
       {showAddContact && (
         <AddContactModal
           identity={identity}
-          onClose={() => setShowAddContact(false)}
+          initialPublicKey={addContactPrefill?.publicKey}
+          onClose={() => {
+            setShowAddContact(false);
+            setAddContactPrefill(null);
+          }}
           onAdded={() => setContacts(loadContacts(identity.id))}
         />
       )}
