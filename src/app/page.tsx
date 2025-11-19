@@ -833,6 +833,103 @@ function CreateGroupModal({
   );
 }
 
+function GroupInfoModal({
+  group,
+  identity,
+  contacts,
+  onClose,
+  onLeave,
+  onKick,
+}: {
+  group: GroupChat;
+  identity: UnlockedIdentity;
+  contacts: Contact[];
+  onClose: () => void;
+  onLeave: () => void;
+  onKick: (targetPk: string) => void;
+}) {
+  // Handle legacy groups where creatorPublicKey might be missing
+  const creatorPk = group.creatorPublicKey || group.memberPublicKeys[0];
+  const isCreator = creatorPk === identity.publicKey;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="w-full max-w-sm rounded border border-neutral-700 bg-neutral-900 p-6 font-mono shadow-xl">
+        <div className="flex justify-between items-start mb-4">
+          <h2 className="text-sm font-bold text-orange-400 uppercase tracking-widest">
+            GROUP INFO
+          </h2>
+          <button onClick={onClose}>
+            <X className="h-4 w-4 text-neutral-500 hover:text-white" />
+          </button>
+        </div>
+
+        <div className="mb-6">
+          <h3 className="text-lg font-bold text-white mb-1">{group.name}</h3>
+          <p className="text-[10px] text-neutral-500 uppercase tracking-wider">
+            Created {new Date(group.createdAt).toLocaleDateString()}
+          </p>
+        </div>
+
+        <h4 className="text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
+          Members ({group.memberPublicKeys.length})
+        </h4>
+        <div className="max-h-60 overflow-y-auto space-y-2 mb-6 pr-2">
+          {group.memberPublicKeys.map((pk) => {
+            const isMe = pk === identity.publicKey;
+            const contact = contacts.find((c) => c.publicKey === pk);
+            const name = isMe
+              ? "You"
+              : contact
+                ? contact.codename
+                : `Member-${pk.slice(0, 4)}`;
+
+            return (
+              <div
+                key={pk}
+                className="flex items-center justify-between bg-neutral-800/50 px-3 py-2 rounded border border-neutral-800"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${isMe ? "text-orange-500" : "text-neutral-200"}`}>
+                      {name}
+                    </span>
+                    {pk === creatorPk && (
+                      <span className="text-[9px] bg-orange-500/20 text-orange-400 px-1 rounded">
+                        ADMIN
+                      </span>
+                    )}
+                  </div>
+                  <span className="block text-[9px] text-neutral-600 truncate max-w-[160px]">
+                    {pk}
+                  </span>
+                </div>
+                {!isMe && isCreator && (
+                  <button
+                    onClick={() => onKick(pk)}
+                    className="text-[10px] font-bold text-red-500 hover:text-red-400 hover:underline ml-2"
+                  >
+                    KICK
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="pt-4 border-t border-neutral-800">
+          <button
+            onClick={onLeave}
+            className="w-full rounded border border-red-900/50 bg-red-950/20 px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-900/30 hover:border-red-800 transition-colors"
+          >
+            LEAVE GROUP
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ───────────────────────────────────────────────
 // Main chat shell
 // ───────────────────────────────────────────────
@@ -862,6 +959,8 @@ function ChatShell({
   const [showQr, setShowQr] = useState(false);
   const [showIdentityDetails, setShowIdentityDetails] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [strangerCodenames, setStrangerCodenames] = useState<Record<string, string>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -889,6 +988,8 @@ function ChatShell({
         senderCodename = contact.codename;
         isContact = true;
       } else {
+        // User wants "Member-xxxx" even if we have the codename cached
+        // The cached codename is ONLY for the Add Contact modal pre-fill
         senderCodename = `Member-${msg.sender.slice(0, 4)}`;
         isContact = false;
       }
@@ -924,10 +1025,11 @@ function ChatShell({
   useEffect(() => {
     const loaded = loadContacts(identity.id);
     setContacts(loaded);
-    if (loaded.length > 0 && !activeContactId) {
+    // Only auto-select if NO contact AND NO group is selected
+    if (loaded.length > 0 && !activeContactId && !activeGroupId) {
       setActiveContactId(loaded[0].id);
     }
-  }, [identity.id, activeContactId]);
+  }, [identity.id, activeContactId, activeGroupId]);
 
   useEffect(() => {
     async function loadAndDecrypt() {
@@ -1089,6 +1191,12 @@ function ChatShell({
                 data.ciphertext
               );
               const bundle = JSON.parse(plaintext) as SenderKeyBundle;
+              if (bundle.senderCodename) {
+                setStrangerCodenames((prev) => ({
+                  ...prev,
+                  [bundle.senderPublicKey]: bundle.senderCodename!,
+                }));
+              }
               applySenderKeyBundle(bundle);
             } catch (err) {
               console.error(
@@ -1199,6 +1307,16 @@ function ChatShell({
           );
           setGroupChats(updated);
 
+          // If I was kicked or I left, clear active group if it was this one
+          if (
+            (evt.type === "leave" && evt.publicKey === identity.publicKey) ||
+            (evt.type === "kick" && evt.targetPublicKey === identity.publicKey)
+          ) {
+            if (activeGroupId === evt.groupId) {
+              setActiveGroupId(null);
+            }
+          }
+
           console.log(
             "[client] applied group-event",
             evt.type,
@@ -1257,7 +1375,8 @@ function ChatShell({
         bundle = await ensureSelfSenderKeyState(
           identity.id,
           activeGroup.id,
-          identity.publicKey
+          identity.publicKey,
+          identity.codename // 🔸 NEW: include codename
         );
       } catch (err) {
         console.error(
@@ -1735,12 +1854,6 @@ function ChatShell({
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Lock className="h-4 w-4 text-orange-500" />
-            <span className="text-xs font-bold text-orange-500 hidden sm:inline uppercase">
-              ACTIVE
-            </span>
-          </div>
         </div>
 
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -1761,6 +1874,30 @@ function ChatShell({
               </div>
             )}
 
+            {activeGroup && !activeContact && (
+              <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded bg-orange-500 flex items-center justify-center font-bold text-black">
+                    {activeGroup.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white">
+                      {activeGroup.name}
+                    </h2>
+                    <p className="text-xs text-neutral-500 font-mono">
+                      {activeGroup.memberPublicKeys.length} members
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowGroupInfo(true)}
+                  className="p-2 text-neutral-400 hover:text-white transition-colors"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              </div>
+            )}
+
             {(activeContact || activeGroup) && loadingMessages && (
               <p className="text-sm text-neutral-500 font-semibold">
                 DECRYPTING MESSAGES…
@@ -1777,8 +1914,14 @@ function ChatShell({
                   senderCodename={group.senderCodename}
                   isContact={group.isContact}
                   senderPublicKey={group.sender}
-                  onAddContact={(key) => {
-                    setAddContactPrefill({ publicKey: key });
+                  onAddContact={(pk) => {
+                    // If we have a cached codename, include it in the prefill
+                    const cachedName = strangerCodenames[pk];
+                    const prefill = cachedName
+                      ? `e2ee-contact:v1:${JSON.stringify({ codename: cachedName, publicKey: pk })}`
+                      : pk;
+
+                    setAddContactPrefill({ publicKey: prefill });
                     setShowAddContact(true);
                   }}
                 />
@@ -1858,6 +2001,7 @@ function ChatShell({
                 groupId: group.id,
                 name: group.name,
                 members: group.memberPublicKeys,
+                creatorPublicKey: identity.publicKey,
               };
 
               // don't send to myself
@@ -1876,6 +2020,77 @@ function ChatShell({
                 );
               }
             }
+          }}
+        />
+      )}
+
+      {showGroupInfo && activeGroup && (
+        <GroupInfoModal
+          group={activeGroup}
+          identity={identity}
+          contacts={contacts}
+          onClose={() => setShowGroupInfo(false)}
+          onLeave={() => {
+            // Broadcast LEAVE event
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const evt: GroupEvent = {
+                type: "leave",
+                groupId: activeGroup.id,
+                publicKey: identity.publicKey,
+              };
+              const recipients = activeGroup.memberPublicKeys.filter(
+                (pk) => pk !== identity.publicKey
+              );
+              if (recipients.length > 0) {
+                ws.send(
+                  JSON.stringify({
+                    type: "group-event",
+                    from: identity.publicKey,
+                    to: recipients,
+                    event: evt,
+                  })
+                );
+              }
+            }
+            // Update local state
+            const updated = applyGroupEvent(identity.id, identity.publicKey, {
+              type: "leave",
+              groupId: activeGroup.id,
+              publicKey: identity.publicKey,
+            });
+            setGroupChats(updated);
+            setActiveGroupId(null);
+            setShowGroupInfo(false);
+          }}
+          onKick={(targetPk) => {
+            // Broadcast KICK event
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const evt: GroupEvent = {
+                type: "kick",
+                groupId: activeGroup.id,
+                targetPublicKey: targetPk,
+              };
+              const recipients = activeGroup.memberPublicKeys.filter(
+                (pk) => pk !== identity.publicKey
+              );
+              if (recipients.length > 0) {
+                ws.send(
+                  JSON.stringify({
+                    type: "group-event",
+                    from: identity.publicKey,
+                    to: recipients,
+                    event: evt,
+                  })
+                );
+              }
+            }
+            // Update local state
+            const updated = applyGroupEvent(identity.id, identity.publicKey, {
+              type: "kick",
+              groupId: activeGroup.id,
+              targetPublicKey: targetPk,
+            });
+            setGroupChats(updated);
           }}
         />
       )}

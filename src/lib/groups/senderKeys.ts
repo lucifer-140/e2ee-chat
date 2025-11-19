@@ -37,6 +37,7 @@ export interface SenderKeyBundle {
   senderPublicKey: string;
   signingPublicKey: string;
   initialChainKey: string; // base64
+  senderCodename?: string; // 🔸 NEW: for enhanced contact add
 }
 
 type SenderKeyStore = Record<
@@ -190,7 +191,8 @@ async function verify(publicKeyB64: string, msg: string, sigB64: string): Promis
 export async function ensureSelfSenderKeyState(
   identityId: string,
   groupId: string,
-  selfPublicKey: string
+  selfPublicKey: string,
+  myCodename?: string // 🔸 NEW
 ): Promise<SenderKeyBundle> {
   let state = loadSenderKeyState(groupId, selfPublicKey);
   if (state) {
@@ -200,6 +202,7 @@ export async function ensureSelfSenderKeyState(
       senderPublicKey: selfPublicKey,
       signingPublicKey: state.signingPublicKey,
       initialChainKey: state.chainKey, // Give them the CURRENT key so they can start decrypting from now
+      senderCodename: myCodename, // 🔸 NEW
     };
   }
 
@@ -234,6 +237,7 @@ export async function ensureSelfSenderKeyState(
     senderPublicKey: selfPublicKey,
     signingPublicKey,
     initialChainKey,
+    senderCodename: myCodename, // 🔸 NEW
   };
 }
 

@@ -6,6 +6,7 @@ export interface GroupChat {
   identityId: string;
   name: string;
   memberPublicKeys: string[];
+  creatorPublicKey: string; // 🔸 NEW
   createdAt: string;
   updatedAt: string;
 }
@@ -51,6 +52,7 @@ export function createGroup(
     identityId,
     name,
     memberPublicKeys,
+    creatorPublicKey: memberPublicKeys[0], // assume first is creator
     createdAt: now,
     updatedAt: now,
   };
@@ -75,20 +77,32 @@ export function deleteGroup(identityId: string, groupId: string): void {
   saveGroups(identityId, next);
 }
 
-export type GroupEvent = {
-  type: "create";
-  groupId: string;
-  name: string;
-  members: string[];
-};
+export type GroupEvent =
+  | {
+    type: "create";
+    groupId: string;
+    name: string;
+    members: string[];
+    creatorPublicKey: string;
+  }
+  | {
+    type: "leave";
+    groupId: string;
+    publicKey: string;
+  }
+  | {
+    type: "kick";
+    groupId: string;
+    targetPublicKey: string;
+  };
 
 export function applyGroupEvent(
   identityId: string,
   myPublicKey: string,
   event: GroupEvent
 ): GroupChat[] {
-  // Only care if I'm actually a member
-  if (!event.members.includes(myPublicKey)) {
+  // For create/update, only care if I'm a member
+  if (event.type === "create" && !event.members.includes(myPublicKey)) {
     return loadGroups(identityId);
   }
 
@@ -96,11 +110,21 @@ export function applyGroupEvent(
   const existing = loadGroups(identityId);
   const idx = existing.findIndex((g) => g.id === event.groupId);
 
-  if (idx >= 0) {
+  // Handle LEAVE
+  if (event.type === "leave") {
+    if (idx === -1) return existing;
+    const group = existing[idx];
+    // If I left, remove group entirely
+    if (event.publicKey === myPublicKey) {
+      const next = existing.filter((g) => g.id !== event.groupId);
+      saveGroups(identityId, next);
+      return next;
+    }
+    // Else remove them from members
+    const nextMembers = group.memberPublicKeys.filter((k) => k !== event.publicKey);
     const updated: GroupChat = {
-      ...existing[idx],
-      name: event.name,
-      memberPublicKeys: event.members,
+      ...group,
+      memberPublicKeys: nextMembers,
       updatedAt: now,
     };
     const next = [...existing];
@@ -109,16 +133,59 @@ export function applyGroupEvent(
     return next;
   }
 
-  const group: GroupChat = {
-    id: event.groupId,
-    identityId,
-    name: event.name,
-    memberPublicKeys: event.members,
-    createdAt: now,
-    updatedAt: now,
-  };
+  // Handle KICK
+  if (event.type === "kick") {
+    if (idx === -1) return existing;
+    const group = existing[idx];
+    // If I was kicked, remove group
+    if (event.targetPublicKey === myPublicKey) {
+      const next = existing.filter((g) => g.id !== event.groupId);
+      saveGroups(identityId, next);
+      return next;
+    }
+    // Else remove target
+    const nextMembers = group.memberPublicKeys.filter((k) => k !== event.targetPublicKey);
+    const updated: GroupChat = {
+      ...group,
+      memberPublicKeys: nextMembers,
+      updatedAt: now,
+    };
+    const next = [...existing];
+    next[idx] = updated;
+    saveGroups(identityId, next);
+    return next;
+  }
 
-  const next = [...existing, group];
-  saveGroups(identityId, next);
-  return next;
+  // Handle CREATE / UPDATE
+  if (event.type === "create") {
+    if (idx >= 0) {
+      const updated: GroupChat = {
+        ...existing[idx],
+        name: event.name,
+        memberPublicKeys: event.members,
+        creatorPublicKey: event.creatorPublicKey,
+        updatedAt: now,
+      };
+      const next = [...existing];
+      next[idx] = updated;
+      saveGroups(identityId, next);
+      return next;
+    }
+
+    const group: GroupChat = {
+      id: event.groupId,
+      identityId,
+      name: event.name,
+      memberPublicKeys: event.members,
+      creatorPublicKey: event.creatorPublicKey,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const next = [...existing, group];
+    saveGroups(identityId, next);
+    return next;
+  }
+
+  return existing;
 }
