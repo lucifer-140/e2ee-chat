@@ -104,6 +104,14 @@ export function deleteContactsForIdentity(identityId: string): Contact[] {
   return contacts;
 }
 
+export function deleteContact(identityId: string, contactId: string) {
+  const root = loadAllContacts();
+  const contacts = root[identityId] ?? [];
+  const filtered = contacts.filter((c) => c.id !== contactId);
+  root[identityId] = filtered;
+  saveAllContacts(root);
+}
+
 
 /**
  * One-time cleanup: remove duplicates per (identityId, publicKey).
