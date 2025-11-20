@@ -253,3 +253,5 @@ block-beta
 
 ## 12. Conclusion
 This project successfully demonstrates a secure, privacy-first messaging architecture. By leveraging client-side cryptography and a minimal relay server, we eliminate the need to trust a central authority with message content. Future improvements could include offline message queuing and the full Double Ratchet algorithm for forward secrecy.
+
+<!--  -->
