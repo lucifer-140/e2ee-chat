@@ -33,16 +33,16 @@ The following diagram illustrates the separation of concerns between the clients
 
 ```mermaid
 graph TD
-    subgraph Client_A [Client A (Alice)]
-        A_UI[UI / React]
-        A_Crypto[Libsodium Crypto Engine]
-        A_Store[Local Storage (Encrypted Keys)]
+    subgraph Client_A ["Client A (Alice)"]
+        A_UI["UI / React"]
+        A_Crypto["Libsodium Crypto Engine"]
+        A_Store["Local Storage (Encrypted Keys)"]
     end
 
-    subgraph Client_B [Client B (Bob)]
-        B_UI[UI / React]
-        B_Crypto[Libsodium Crypto Engine]
-        B_Store[Local Storage (Encrypted Keys)]
+    subgraph Client_B ["Client B (Bob)"]
+        B_UI["UI / React"]
+        B_Crypto["Libsodium Crypto Engine"]
+        B_Store["Local Storage (Encrypted Keys)"]
     end
 
     subgraph Server [Relay Server]
