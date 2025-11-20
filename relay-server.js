@@ -2,6 +2,7 @@
 // Very simple E2EE-friendly WebSocket relay.
 // It never sees plaintext, only small JSON envelopes.
 
+/* eslint-disable @typescript-eslint/no-require-imports */
 const WebSocket = require("ws");
 
 const PORT = 4000;

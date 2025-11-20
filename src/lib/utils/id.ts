@@ -5,8 +5,11 @@ export function safeRandomId(): string {
   try {
     if (
       typeof crypto !== "undefined" &&
+      typeof crypto !== "undefined" &&
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       typeof (crypto as any).randomUUID === "function"
     ) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (crypto as any).randomUUID();
     }
   } catch {

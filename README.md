@@ -11,13 +11,17 @@ A secure, end-to-end encrypted (E2EE) chat application built with Next.js, React
 *   **Zero-Knowledge Server**: The relay server is "dumb" and stateless. It only forwards encrypted blobs and handles basic routing.
 *   **Group Management**:
     *   Create private groups.
-    *   Add members (Admin only).
+    *   Add members to existing groups (Admin only).
     *   Kick members (Admin only).
     *   Leave groups.
     *   Real-time membership updates.
+*   **Contact Management**:
+    *   Delete contacts.
+    *   Clear chat history.
+    *   Add "strangers" directly from group chats.
 *   **Persistence**:
     *   Encrypted local storage for identities and keys.
-    *   Local message history (cleared on logout/leave/kick).
+    *   Local message history for both 1:1 and groups (cleared on logout/leave/kick).
 *   **Modern UI**: Built with Tailwind CSS v4, featuring a dark, hacker-aesthetic interface.
 
 ## 🛡️ Security Architecture
@@ -88,18 +92,17 @@ You need to run both the relay server and the client application.
 *   Your secure identity is created and stored in your browser's Local Storage.
 
 ### 2. Add Contacts
-*   Share your **Public Key** or **Contact Bundle** (found in the sidebar) with a friend.
-*   Click **"+ ADD CONTACT"**.
-*   Enter their Codename and paste their Public Key/Bundle.
-*   Once added, you can start a secure 1:1 chat.
+*   **Manual**: Share your **Public Key** or **Contact Bundle** (found in the sidebar) with a friend. Click **"+ ADD CONTACT"**, enter their details.
+*   **From Group**: In a group chat, click the **"ADD"** button next to a stranger's name to add them instantly.
 
-### 3. Create a Group
-*   Click **"+ NEW GROUP"**.
-*   Enter a Group Name.
-*   Select the contacts you want to include.
-*   Click "CREATE GROUP".
+### 3. Manage Contacts
+*   Open a 1:1 chat.
+*   Click the **Menu** icon (three dots) in the header.
+*   **Clear History**: Deletes all local messages for this chat.
+*   **Delete Contact**: Removes the contact and deletes all history.
 
-### 4. Manage Groups
+### 4. Create & Manage Groups
+*   **Create**: Click **"+ NEW GROUP"**, select contacts, and name it.
 *   **Add Member**: Open Group Info -> Click "+ ADD MEMBER" (Creator only).
 *   **Kick Member**: Open Group Info -> Click "KICK" next to a member's name (Creator only).
 *   **Leave Group**: Open Group Info -> Click "LEAVE GROUP".
@@ -107,10 +110,13 @@ You need to run both the relay server and the client application.
 
 ## 📂 Project Structure
 
-*   `src/app/page.tsx`: Main application logic (UI, State, WebSocket handling).
-*   `src/lib/crypto/`: Core cryptographic wrappers (session keys, fingerprinting).
+*   `src/app/page.tsx`: Root component and layout.
+*   `src/components/chat/`: Chat interface components (`ChatShell`, `MessageGroup`).
+*   `src/components/identity/`: Identity management screens (`IdentityVault`, `CreateIdentity`).
+*   `src/components/modals/`: UI Modals (`AddContact`, `CreateGroup`, `GroupInfo`, etc.).
+*   `src/lib/crypto/`: Core cryptographic wrappers (sodium, keys, fingerprinting).
 *   `src/lib/groups/`: Group management logic (store, sender keys protocol).
-*   `src/lib/identities/`: Identity management (creation, unlocking, storage).
+*   `src/lib/contacts/`: Contact storage and management.
 *   `src/lib/messages/`: Message storage and persistence.
 *   `relay-server.js`: The WebSocket relay server.
 

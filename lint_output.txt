@@ -1,0 +1,27 @@
+
+> e2ee-chat-clean@0.1.0 lint
+> eslint
+
+
+C:\Users\LENOVO\My Digital Vault\Developer\Projects\e2ee-chat-clean\relay-server.js
+  5:19  error  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+C:\Users\LENOVO\My Digital Vault\Developer\Projects\e2ee-chat-clean\src\app\layout.tsx
+  5:7  warning  'geist' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\LENOVO\My Digital Vault\Developer\Projects\e2ee-chat-clean\src\app\page.tsx
+  30:3  warning  Unused eslint-disable directive (no problems were reported from 'react-hooks/exhaustive-deps')
+
+C:\Users\LENOVO\My Digital Vault\Developer\Projects\e2ee-chat-clean\src\components\chat\ChatShell.tsx
+    21:5   warning  'addContact' is defined but never used                                                                                                @typescript-eslint/no-unused-vars
+    76:12  warning  'loadingMessages' is assigned a value but never used                                                                                  @typescript-eslint/no-unused-vars
+   347:8   warning  React Hook useEffect has missing dependencies: 'activeContact' and 'activeGroup'. Either include them or remove the dependency array  react-hooks/exhaustive-deps
+  1090:33  warning  'group' is defined but never used                                                                                                     @typescript-eslint/no-unused-vars
+
+C:\Users\LENOVO\My Digital Vault\Developer\Projects\e2ee-chat-clean\src\lib\crypto\sodium.ts
+  239:11  warning  'ciphertextB64' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  240:11  warning  'nonceB64' is assigned a value but never used       @typescript-eslint/no-unused-vars
+
+Γ£û 9 problems (1 error, 8 warnings)
+  0 errors and 1 warning potentially fixable with the `--fix` option.
+
