@@ -65,8 +65,8 @@ For a deep dive into the cryptographic protocols, architecture diagrams, and thr
 ### Quick Architecture Overview
 ```mermaid
 graph LR
-    Client[Client (React + Libsodium)] <-->|Encrypted JSON| Server[Relay Server (Node.js)]
-    Server <-->|Relayed JSON| Peer[Peer Client]
+    Client["Client (React + Libsodium)"] <-->|"Encrypted JSON"| Server["Relay Server (Node.js)"]
+    Server <-->|"Relayed JSON"| Peer["Peer Client"]
 ```
 
 ## ⚠️ Security Disclaimer
