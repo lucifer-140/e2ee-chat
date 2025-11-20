@@ -230,5 +230,26 @@ block-beta
 -   **Database Leaks**: The server stores no persistent message history. Even if it did, it would only be encrypted blobs.
 -   **Device Compromise**: Local storage is encrypted with a user-derived passphrase.
 
-## 8. Conclusion
+## 8. Performance Analysis
+-   **Client-Side Overhead**: Utilizing WebAssembly (WASM) for Libsodium provides near-native performance for cryptographic operations, significantly faster than pure JavaScript implementations.
+-   **Group Scalability**: The Sender Key protocol reduces the complexity of sending a group message from $O(N^2)$ (pairwise encryption) to $O(N)$ (one encryption, N decryptions). This allows the system to scale efficiently to large groups without burdening the sender's device.
+
+## 9. Security Trade-offs & Limitations
+-   **Metadata Leakage**: While message content is protected, the relay server can observe traffic patterns (who is messaging whom, message size, and timing). This is a known trade-off in systems that do not employ onion routing (like Tor).
+-   **Forward Secrecy**: The current implementation uses long-term identity keys for simplicity. If an identity key is compromised, past messages could potentially be decrypted. A full implementation of the Double Ratchet Algorithm would provide forward secrecy.
+-   **No Offline Queuing**: Messages are ephemeral and delivered only if the recipient is online. This reduces server storage risks but impacts usability.
+
+## 10. Implementation Highlights
+-   **Directory Structure**:
+    -   `src/lib/crypto`: Core cryptographic wrappers (encryption, signing, hashing).
+    -   `src/lib/identities`: Local vault management and key storage.
+    -   `src/lib/groups`: Sender Key state management and group logic.
+-   **State Management**: React hooks (`useEffect`) are optimized to handle asynchronous WASM initialization and key derivation without blocking the UI thread.
+
+## 11. Future Roadmap
+-   **Offline Inbox**: Implementing an encrypted store-and-forward mechanism on the server to hold messages for offline users.
+-   **File Sharing**: Encrypting large files with ephemeral symmetric keys and transmitting the key via the secure channel, while hosting the encrypted blob on a separate storage service.
+-   **Multi-Device Support**: Synchronizing the identity vault across devices using a secure pairing protocol.
+
+## 12. Conclusion
 This project successfully demonstrates a secure, privacy-first messaging architecture. By leveraging client-side cryptography and a minimal relay server, we eliminate the need to trust a central authority with message content. Future improvements could include offline message queuing and the full Double Ratchet algorithm for forward secrecy.
