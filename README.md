@@ -60,7 +60,7 @@ A secure, privacy-first messaging platform built with **Next.js** and **Libsodiu
 
 ## 📖 Documentation
 
-For a deep dive into the cryptographic protocols, architecture diagrams, and threat model, please refer to the **[Technical Report](./report.md)** included in this repository.
+For a deep dive into the cryptographic protocols, architecture diagrams, and threat model, please refer to the **[Technical Report](./REPORT.md)** included in this repository.
 
 ### Quick Architecture Overview
 ```mermaid

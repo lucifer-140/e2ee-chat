@@ -61,6 +61,24 @@ graph TD
     style B_Crypto fill:#bfb,stroke:#333,stroke-width:2px
 ```
 
+### 3.3 Architectural Style Classification
+Based on standard software architecture classifications, the project implements a hybrid approach:
+
+#### 1. Distributed Architecture Style: **Broker Pattern**
+The system falls under the **Distributed** category rather than **Data-Centric**.
+*   **Why not Data-Centric?** In a Data-Centric style (e.g., Blackboard or Shared Database), the central data store is the primary integration point and source of truth. Here, the server is transient and stateless; it does not hold the "truth."
+*   **The Broker Pattern**: The Relay Server acts as a **Message Broker**. It decouples the sender and receiver. Clients do not connect directly (as in pure P2P) but communicate via a central intermediary that manages the distribution of messages without modifying them.
+
+#### 2. Structural Architecture Style: **Layered Architecture**
+Internally, the "Thick Client" follows a strict **Layered** structural style to manage complexity:
+*   **Presentation Layer**: React Components (UI).
+*   **Application Layer**: State management and event handling logic.
+*   **Security Layer**: The Libsodium wrapper (The "Trust Boundary").
+*   **Persistence Layer**: Encrypted LocalStorage/IndexedDB.
+
+#### 3. Topology: **Client-Server**
+Physically, the nodes are arranged in a star topology (Client-Server), providing the reliability of centralized infrastructure with the privacy properties of a P2P system.
+
 ## 4. Cryptographic Protocol
 ### 4.1 Primitives
 The application relies on modern, high-speed cryptographic primitives provided by Libsodium:

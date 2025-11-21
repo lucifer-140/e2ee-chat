@@ -144,45 +144,49 @@ function MessageGroup({
   return (
     <div
       className={`flex ${direction === "out" ? "justify-end" : "justify-start"
-        } group mb-3`}
+        } group mb-4 animate-fade-in`}
     >
-      <div
-        className={`rounded px-5 py-3 space-y-2 max-w-2xl border transition-all hover:shadow-lg ${direction === "out"
-          ? "border-orange-400/50 bg-orange-950/40 text-orange-50 hover:border-orange-400 hover:bg-orange-950/60"
-          : "border-neutral-600 bg-neutral-800 text-neutral-50 hover:border-neutral-500 hover:bg-neutral-700"
-          }`}
-      >
+      <div className="max-w-2xl">
         {direction === "in" && senderCodename && (
-          <div className="mb-1">
-            {isContact ? (
-              <p className="text-xs font-bold text-orange-400 uppercase tracking-wider">
-                {senderCodename}
-              </p>
-            ) : (
-              <button
-                onClick={() => senderPublicKey && onAddContact?.(senderPublicKey)}
-                className="text-xs font-bold text-orange-400 uppercase tracking-wider hover:underline hover:text-orange-300 text-left"
-                title="Add to contacts"
-              >
-                {senderCodename} <span className="opacity-50 text-[10px]">(ADD)</span>
-              </button>
-            )}
+          <div className="mb-1 ml-1 flex items-center gap-2">
+            <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider">
+              {isContact ? (
+                <span className="text-neon-cyan">{senderCodename}</span>
+              ) : (
+                <button
+                  onClick={() => senderPublicKey && onAddContact?.(senderPublicKey)}
+                  className="hover:text-neon-orange hover:underline transition-colors"
+                  title="Add to contacts"
+                >
+                  {senderCodename} <span className="opacity-50">(ADD)</span>
+                </button>
+              )}
+            </span>
+            <span className="text-[10px] font-mono text-neutral-600">• {timeStr}</span>
           </div>
         )}
-        {messages.map((m) => (
-          <p
-            key={m.id}
-            className="whitespace-pre-wrap text-sm break-words leading-relaxed font-mono"
-          >
-            {m.plaintext}
-          </p>
-        ))}
-        <p
-          className={`text-xs mt-3 transition-opacity opacity-70 group-hover:opacity-100 font-mono ${direction === "out" ? "text-orange-400/60" : "text-neutral-500"
+
+        {direction === "out" && (
+          <div className="mb-1 mr-1 text-right">
+            <span className="text-[10px] font-mono text-neon-orange/50 uppercase tracking-wider">YOU • {timeStr}</span>
+          </div>
+        )}
+
+        <div
+          className={`rounded-2xl px-5 py-3 space-y-2 shadow-lg backdrop-blur-sm border transition-all ${direction === "out"
+            ? "rounded-tr-none bg-gradient-to-br from-orange-600/80 to-red-700/80 border-orange-500/20 text-white shadow-[0_4px_20px_rgba(234,88,12,0.2)]"
+            : "rounded-tl-none bg-white/5 border-white/10 text-neutral-200 hover:bg-white/10"
             }`}
         >
-          {timeStr}
-        </p>
+          {messages.map((m) => (
+            <p
+              key={m.id}
+              className="whitespace-pre-wrap text-sm break-words leading-relaxed font-sans"
+            >
+              {m.plaintext}
+            </p>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -2062,8 +2066,8 @@ function ChatShell({
       )}
 
       {/* Main chat area */}
-      <div className="flex-1 flex flex-col bg-black min-w-0 relative">
-        <div className="flex-shrink-0 h-16 flex items-center justify-between border-b border-neutral-700 bg-neutral-900 px-4 md:px-6 relative z-20">
+      <div className="flex-1 flex flex-col bg-gradient-to-b from-transparent to-black/20 min-w-0 relative">
+        <div className="flex-shrink-0 h-20 flex items-center justify-between border-b border-white/10 backdrop-blur-md bg-black/10 px-6 relative z-20">
           <div className="flex items-center gap-4 flex-1 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -2073,39 +2077,39 @@ function ChatShell({
             </button>
             {activeContact ? (
               <div className="min-w-0">
-                <h2 className="text-base font-bold text-white truncate">
+                <h2 className="text-xl font-bold text-white truncate tracking-wide">
                   {activeContact.codename}
                 </h2>
-                <p className="text-xs text-neutral-400">
-                  E2EE ·{" "}
-                  <span className="text-orange-400 font-mono font-semibold">
-                    {activeContactFp}
-                  </span>
-                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="w-2 h-2 rounded-full bg-neon-green shadow-[0_0_8px_#22c55e]"></span>
+                  <p className="text-xs text-neon-green/80 font-mono tracking-wider">
+                    SECURE_CONNECTION_ESTABLISHED
+                  </p>
+                </div>
               </div>
             ) : activeGroup ? (
               <div className="min-w-0">
-                <h2 className="text-base font-bold text-white truncate flex items-center gap-2">
+                <h2 className="text-xl font-bold text-white truncate flex items-center gap-2 tracking-wide">
                   <div className="h-2 w-2 rounded-full bg-orange-500" />
                   {activeGroup.name}
                 </h2>
-                <p className="text-xs text-neutral-400">
-                  E2EE ·{" "}
-                  <span className="text-orange-400 font-mono">
-                    {activeGroup.memberPublicKeys.length} members
-                  </span>
-                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="w-2 h-2 rounded-full bg-neon-green shadow-[0_0_8px_#22c55e]"></span>
+                  <p className="text-xs text-neon-green/80 font-mono tracking-wider">
+                    ENCRYPTED_GROUP_CHANNEL · {activeGroup.memberPublicKeys.length} MEMBERS
+                  </p>
+                </div>
               </div>
             ) : (
-              <div className="text-sm text-neutral-500">
-                Select a contact or group to start
+              <div className="text-sm text-neutral-500 font-mono">
+                Select a secure channel to begin
               </div>
             )}
           </div>
           {activeGroup && !activeContact && (
             <button
               onClick={() => setShowGroupInfo(true)}
-              className="p-2 text-neutral-400 hover:text-white transition-colors"
+              className="p-2 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors"
             >
               <Menu className="h-5 w-5" />
             </button>
@@ -2113,7 +2117,7 @@ function ChatShell({
           {activeContact && (
             <button
               onClick={() => setShowContactInfo(true)}
-              className="p-2 text-neutral-400 hover:text-white transition-colors"
+              className="p-2 rounded-lg hover:bg-white/5 text-neutral-400 hover:text-white transition-colors"
             >
               <Menu className="h-5 w-5" />
             </button>
@@ -2124,15 +2128,15 @@ function ChatShell({
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
             {!activeContact && !activeGroup && (
               <div className="flex h-full items-center justify-center">
-                <div className="text-center">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded border border-neutral-700 bg-neutral-800">
-                    <Lock className="h-8 w-8 text-neutral-600" />
+                <div className="text-center animate-fade-in">
+                  <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-black/50 border border-white/10 shadow-[0_0_30px_rgba(234,88,12,0.1)] backdrop-blur-md">
+                    <Lock className="h-10 w-10 text-neon-orange animate-pulse" />
                   </div>
-                  <p className="text-base text-neutral-300 font-semibold">
-                    Select a contact or group
-                  </p>
-                  <p className="mt-2 text-sm text-neutral-500">
-                    to start secure communication
+                  <h3 className="text-xl font-bold text-white tracking-widest uppercase mb-2">
+                    Secure Channel Required
+                  </h3>
+                  <p className="text-sm text-neutral-400 font-mono max-w-xs mx-auto leading-relaxed">
+                    Select a contact or group from the sidebar to initialize <span className="text-neon-cyan">E2EE</span> communication protocol.
                   </p>
                 </div>
               </div>
@@ -2181,8 +2185,11 @@ function ChatShell({
           </div>
 
           {(activeContact || activeGroup) && (
-            <div className="flex-shrink-0 border-t border-neutral-700 bg-neutral-900 p-5">
-              <div className="flex items-end gap-3">
+            <div className="flex-shrink-0 border-t border-white/10 bg-black/20 p-6 backdrop-blur-sm">
+              <div className="flex items-center gap-4">
+                <button className="p-3 rounded-full bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition-colors">
+                  <Lock className="h-5 w-5" />
+                </button>
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -2192,8 +2199,8 @@ function ChatShell({
                       handleSend();
                     }
                   }}
-                  placeholder="Type message…"
-                  className="flex-1 rounded border border-neutral-700 bg-black px-4 py-3 text-sm font-mono text-white placeholder-neutral-600 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 resize-none max-h-20 transition-all hover:border-neutral-600"
+                  placeholder="Type a secure message..."
+                  className="flex-1 bg-black/50 border border-white/10 rounded-full px-6 py-4 text-white placeholder-neutral-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20 transition-all font-mono text-sm"
                 />
                 <button
                   onClick={handleSend}
@@ -2201,14 +2208,10 @@ function ChatShell({
                     !input.trim() ||
                     (!activeContact?.sharedKey && !activeGroup)
                   }
-                  className="flex h-11 w-11 items-center justify-center rounded bg-orange-500 text-black hover:bg-orange-400 transition-all hover:shadow-lg hover:shadow-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none flex-shrink-0 font-bold"
+                  className="p-4 rounded-full bg-orange-600 text-white hover:bg-orange-500 shadow-[0_0_15px_rgba(234,88,12,0.4)] hover:shadow-[0_0_25px_rgba(234,88,12,0.6)] transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:shadow-none"
                 >
                   <Send className="h-5 w-5" />
                 </button>
-              </div>
-              <div className="mt-3 flex items-center gap-2 text-xs text-neutral-500">
-                <Lock className="h-3 w-3 text-orange-500 flex-shrink-0" />
-                <span className="font-semibold">End-to-end encrypted</span>
               </div>
             </div>
           )}
