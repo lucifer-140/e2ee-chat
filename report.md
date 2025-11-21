@@ -107,6 +107,14 @@ sequenceDiagram
     Note over Alice, Bob: Both now possess the same Shared Secret
 ```
 
+**Mathematical Definition:**
+Let $G$ be the base point on the Curve25519 elliptic curve.
+1.  **Alice** generates a private key $a$ and public key $A = a \cdot G$.
+2.  **Bob** generates a private key $b$ and public key $B = b \cdot G$.
+3.  **Alice** computes the shared secret $S_A = a \cdot B = a \cdot (b \cdot G)$.
+4.  **Bob** computes the shared secret $S_B = b \cdot A = b \cdot (a \cdot G)$.
+5.  Since scalar multiplication is commutative, $S_A = S_B = S$.
+
 > **Example Scenario:**
 > 1.  **Alice** generates ephemeral pair: `priv_a = 0x11...`, `pub_A = 0xAA...`
 > 2.  **Bob** has identity key: `priv_b = 0x22...`, `pub_B = 0xBB...`
@@ -155,6 +163,15 @@ flowchart LR
     end
 ```
 
+**Mathematical Definition:**
+Encryption uses the **XChaCha20-Poly1305** construction.
+*   Let $K$ be the 32-byte Shared Secret.
+*   Let $N$ be a random 24-byte Extended Nonce.
+*   Let $P$ be the Plaintext message.
+*   The encryption function $E$ produces a pair $(C, T)$:
+    $$ (C, T) = \text{XChaCha20-Poly1305}(K, N, P) $$
+    Where $C$ is the Ciphertext and $T$ is the 16-byte Authentication Tag.
+
 > **Example Scenario:**
 > *   **Input**: "Meet at 5 PM"
 > *   **Shared Secret**: `0xFE...` (Derived from handshake)
@@ -171,6 +188,13 @@ To avoid the inefficiency of encrypting every group message $N$ times (for $N$ m
 2.  **Distribution**: This key is encrypted individually (unicast) for every other member using the 1:1 protocol.
 3.  **Broadcasting**: Once distributed, the sender encrypts messages using their Sender Key. The server relays this single ciphertext to all members.
 4.  **Decryption**: Recipients use the stored Sender Key for that member to decrypt the message.
+
+**Mathematical Definition (The Ratchet):**
+The Sender Key advances using a Hash-Based Key Derivation Function (HKDF), specifically `HMAC-SHA256`.
+*   Let $CK_i$ be the current **Chain Key**.
+*   **Message Key Derivation**: $MK_i = \text{HMAC-SHA256}(CK_i, \text{0x01})$.
+*   **Next Chain Key**: $CK_{i+1} = \text{HMAC-SHA256}(CK_i, \text{0x02})$.
+*   The message is encrypted using $MK_i$. The Chain Key $CK_i$ is then destroyed and replaced by $CK_{i+1}$, ensuring forward secrecy for future messages relative to the current state.
 
 > **Example Scenario:**
 > *   **Alice** creates a random 32-byte **Chain Key** and a **Signature Key**.
@@ -242,41 +266,71 @@ stateDiagram-v2
 ```
 
 ## 7. Threat Model
-We assume an "Honest-but-Curious" server and a potentially hostile network environment.
+We assume an "Honest-but-Curious" server and a potentially hostile network environment. The following diagram details the specific attack vectors and the corresponding mitigations.
 
 ### 7.1 Threat Analysis Diagram
 
 ```mermaid
-block-beta
-    columns 3
-    
-    block:Attacker1
-        A1_Icon[("Network Listener")]
-        A1_Desc["Sees TLS Traffic"]
-        A1_Result["Safe (HTTPS/WSS)"]
+flowchart TD
+    subgraph Attack_Surface [Attack Surface]
+        direction TB
+        Network[Network Layer]
+        Server[Relay Server]
+        Device[User Device]
+        Identity[Identity Verification]
     end
 
-    block:Attacker2
-        A2_Icon[("Server Admin")]
-        A2_Desc["Has DB Access"]
-        A2_Result["Safe (Only Ciphertext)"]
+    subgraph Threats
+        T_Snoop[Eavesdropping / MITM]
+        T_Malice[Malicious Admin / Subpoena]
+        T_Theft[Device Theft / Malware]
+        T_Spoof[Impersonation]
     end
 
-    block:Attacker3
-        A3_Icon[("Physical Thief")]
-        A3_Desc["Steals Device"]
-        A3_Result["Safe (Encrypted Vault)"]
+    subgraph Mitigations
+        M_TLS[TLS 1.3 + E2EE]
+        M_Blind[Blind Relay / Zero-Knowledge]
+        M_Vault[Argon2id Encrypted Vault]
+        M_Finger[Safety Codes / Fingerprints]
     end
-    
-    style A1_Result fill:#9f9,stroke:#333
-    style A2_Result fill:#9f9,stroke:#333
-    style A3_Result fill:#9f9,stroke:#333
+
+    Network --> T_Snoop
+    Server --> T_Malice
+    Device --> T_Theft
+    Identity --> T_Spoof
+
+    T_Snoop -.-> M_TLS
+    T_Malice -.-> M_Blind
+    T_Theft -.-> M_Vault
+    T_Spoof -.-> M_Finger
+
+    style T_Snoop fill:#f99,stroke:#333
+    style T_Malice fill:#f99,stroke:#333
+    style T_Theft fill:#f99,stroke:#333
+    style T_Spoof fill:#f99,stroke:#333
+
+    style M_TLS fill:#9f9,stroke:#333
+    style M_Blind fill:#9f9,stroke:#333
+    style M_Vault fill:#9f9,stroke:#333
+    style M_Finger fill:#9f9,stroke:#333
 ```
 
-### 7.2 Mitigations
--   **MITM Attacks**: Mitigated by "Safety Numbers" (Public Key Fingerprints) which users can manually verify out-of-band.
--   **Database Leaks**: The server stores no persistent message history. Even if it did, it would only be encrypted blobs.
--   **Device Compromise**: Local storage is encrypted with a user-derived passphrase.
+### 7.2 Detailed Mitigations
+1.  **Network Snooping**:
+    *   **Risk**: An attacker on the same Wi-Fi or ISP captures packets.
+    *   **Defense**: All traffic is wrapped in **TLS 1.3** (HTTPS/WSS). Even if TLS is broken, the payload is **End-to-End Encrypted** (XChaCha20), meaning the attacker sees only random noise.
+
+2.  **Server Compromise**:
+    *   **Risk**: The server administrator logs all messages or is forced to hand over data.
+    *   **Defense**: The server is a **Blind Relay**. It possesses no private keys and cannot decrypt any messages. It stores no persistent message history (ephemeral RAM only).
+
+3.  **Device Compromise**:
+    *   **Risk**: A thief steals the physical device or malware accesses the local storage.
+    *   **Defense**: The Identity Vault (containing private keys) is encrypted using **XSalsa20-Poly1305**. The key for this vault is derived from the user's passphrase using **Argon2id** (a memory-hard function resistant to GPU cracking).
+
+4.  **Identity Spoofing (MITM)**:
+    *   **Risk**: An attacker intercepts the initial handshake and swaps public keys (Man-in-the-Middle).
+    *   **Defense**: Users can verify **Safety Codes** (SHA-256 fingerprints of public keys) out-of-band (e.g., in person or via another channel) to ensure they are communicating with the correct party.
 
 ## 8. Performance Analysis
 -   **Client-Side Overhead**: Utilizing WebAssembly (WASM) for Libsodium provides near-native performance for cryptographic operations, significantly faster than pure JavaScript implementations.
