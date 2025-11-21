@@ -107,6 +107,13 @@ sequenceDiagram
     Note over Alice, Bob: Both now possess the same Shared Secret
 ```
 
+> **Example Scenario:**
+> 1.  **Alice** generates ephemeral pair: `priv_a = 0x11...`, `pub_A = 0xAA...`
+> 2.  **Bob** has identity key: `priv_b = 0x22...`, `pub_B = 0xBB...`
+> 3.  **Alice** calculates `Shared_S = ECDH(priv_a, pub_B)`.
+> 4.  **Bob** receives `pub_A` and calculates `Shared_S = ECDH(priv_b, pub_A)`.
+> 5.  Both result in the same secret `0x99...` without ever transmitting it.
+
 ### 4.3 Encryption/Decryption Process
 All messages are encrypted using the derived shared secret.
 
@@ -148,6 +155,14 @@ flowchart LR
     end
 ```
 
+> **Example Scenario:**
+> *   **Input**: "Meet at 5 PM"
+> *   **Shared Secret**: `0xFE...` (Derived from handshake)
+> *   **Nonce**: `0x01...` (Unique per message)
+> *   **Process**: `XChaCha20Poly1305_Encrypt("Meet at 5 PM", Key, Nonce)`
+> *   **Output**: `Ciphertext = 0x82...`, `MAC = 0x33...`
+> *   **Result**: The server sees only `0x82...` and `0x33...`. It cannot decrypt the text "Meet at 5 PM".
+
 ## 5. Message Flow & Features
 ### 5.1 Group Messaging (Sender Keys)
 To avoid the inefficiency of encrypting every group message $N$ times (for $N$ members), we implemented a variant of the **Sender Key** protocol used by Signal.
@@ -156,6 +171,12 @@ To avoid the inefficiency of encrypting every group message $N$ times (for $N$ m
 2.  **Distribution**: This key is encrypted individually (unicast) for every other member using the 1:1 protocol.
 3.  **Broadcasting**: Once distributed, the sender encrypts messages using their Sender Key. The server relays this single ciphertext to all members.
 4.  **Decryption**: Recipients use the stored Sender Key for that member to decrypt the message.
+
+> **Example Scenario:**
+> *   **Alice** creates a random 32-byte **Chain Key** and a **Signature Key**.
+> *   She encrypts this bundle *once* for Bob (using their 1:1 shared secret) and *once* for Charlie.
+> *   Bob and Charlie now have "Alice's Group Key".
+> *   When Alice sends a message, she derives a **Message Key** from her Chain Key, encrypts the message, and increments the chain.
 
 ### 5.2 Group Message Flow Diagram
 
@@ -189,6 +210,15 @@ sequenceDiagram
         Charlie->>Charlie: Decrypt(Ciphertext, SenderKey_A)
     end
 ```
+
+> **Example Walkthrough:**
+> 1.  **Alice** types "Hello Team".
+> 2.  Her client grabs `SenderKey_A` from storage.
+> 3.  It encrypts "Hello Team" -> `Ciphertext_1`.
+> 4.  Client sends `Ciphertext_1` to Server with `groupId="Project Alpha"`.
+> 5.  **Server** looks up members of "Project Alpha" (Bob, Charlie).
+> 6.  **Server** forwards `Ciphertext_1` to Bob and Charlie.
+> 7.  **Bob** receives it, sees it's from Alice, looks up `SenderKey_A`, and decrypts it.
 
 ## 6. User Experience & Flow
 The user journey emphasizes security at every step, from identity creation to active communication.
